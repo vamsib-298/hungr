@@ -1,0 +1,14 @@
+{
+  "name": "hungr-functions",
+  "description": "Hungr Cloud Functions: 9:00 PM Hard Cutoff, 21:01 Kitchen Split, and Batch Dispatch",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^12.1.0",
+    "firebase-functions": "^5.0.1"
+  },
+  "engines": {
+    "node": "18"
+  },
+  "private": true
+}

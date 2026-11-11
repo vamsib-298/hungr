@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for Role-Based Access Control (RBAC)
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isDriver() {
+      return isAuthenticated() && (getUserData().role == 'driver' || request.auth.token.role == 'driver');
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (getUserData().role == 'admin' || request.auth.token.role == 'admin');
+    }
+
+    // Server-side timestamp validation helper for 21:00 IST Cutoff:
+    // IST is UTC + 5 hours 30 minutes. 21:00 IST corresponds to 15:30 UTC.
+    function isBeforeIstCutoff() {
+      let utcHours = request.time.toMillis() / 1000 / 3600 % 24;
+      let utcMinutes = request.time.toMillis() / 1000 / 60 % 60;
+      // 15:30 UTC = 21:00 IST
+      return (utcHours < 15) || (utcHours == 15 && utcMinutes < 30);
+    }
+
+    // User Profile Document
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isOwner(userId) || isAdmin();
+      allow delete: if isOwner(userId) || isAdmin(); // DPDP Act & Play Store compliance
+    }
+
+    // Pre-configured Delivery Clusters
+    match /clusters/{clusterId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Pass Subscriptions
+    match /passes/{passId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isDriver() || isAdmin());
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      // Cannot extend pass beyond hardExpiryDate ceiling
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (resource.data.userId == request.auth.uid && request.resource.data.hardExpiryDate == resource.data.hardExpiryDate)
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Meal Tickets Ledger
+    match /meal_tickets/{ticketId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.assignedDriverId == request.auth.uid ||
+        isDriver() ||
+        isAdmin()
+      );
+
+      // Meal Ticket creation allowed only via verified Pass purchase
+      allow create: if isAuthenticated() && (
+        request.resource.data.userId == request.auth.uid || isAdmin()
+      );
+
+      // Customer modification / skip strictly gated before 21:00 IST (15:30 UTC)
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        // Driver can update status to DELIVERED and set dropProofImageUrl
+        (isDriver() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'dropProofImageUrl', 'deliveredAt'])) ||
+        // Customer can only modify combo before 21:00 IST cutoff
+        (isOwner(resource.data.userId) &&
+         isBeforeIstCutoff() &&
+         resource.data.status == 'SCHEDULED' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['comboSelection', 'addOns']))
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // Daily Inventory & Batch Locks
+    match /daily_inventory/{date} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Driver Manifests
+    match /driver_manifests/{manifestId} {
+      allow read: if isAuthenticated() && (isDriver() || isAdmin());
+      allow write: if isAuthenticated() && (isDriver() || isAdmin());
+    }
+
+    // Kitchen Batches (21:01 IST Aggregations)
+    match /kitchen_batches/{batchId} {
+      allow read: if isAuthenticated() && isAdmin();
+      allow write: if isAdmin();
+    }
+  }
+}

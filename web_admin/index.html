@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hungr Operations Command • Khammam Morning Tiffin Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Top Navigation Bar -->
+  <header class="top-nav">
+    <div class="nav-brand">
+      <div class="brand-badge">H</div>
+      <div>
+        <h1 class="brand-title">HUNGR OPERATIONS WEB COMMAND</h1>
+        <p class="brand-subtitle">Khammam Hyper-Batched Morning Tiffin Dispatch & Kitchen Engine</p>
+      </div>
+    </div>
+    <div class="nav-actions">
+      <div class="status-indicator">
+        <span class="pulse-dot"></span>
+        <span>KHAMMAM MORNING OPS LIVE</span>
+      </div>
+      <div class="time-pill" id="live-time">07:30 AM IST</div>
+    </div>
+  </header>
+
+  <!-- Metric Banner KPI Cards -->
+  <section class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-icon blue">🏪</div>
+      <div class="metric-content">
+        <span class="metric-label">PARTNER KITCHENS</span>
+        <span class="metric-value" id="total-shops-kpi">4 Shops</span>
+        <span class="metric-sub positive" id="open-shops-kpi">3 Open • 1 Closed</span>
+      </div>
+    </div>
+
+    <div class="metric-card">
+      <div class="metric-icon red">🍱</div>
+      <div class="metric-content">
+        <span class="metric-label">DAILY MORNING ORDERS</span>
+        <span class="metric-value" id="total-orders-kpi">160 Meals</span>
+        <span class="metric-sub">Across 16 Khammam Clusters</span>
+      </div>
+    </div>
+
+    <div class="metric-card">
+      <div class="metric-icon green">⛽</div>
+      <div class="metric-content">
+        <span class="metric-label">FUEL SAVED (CONSOLIDATION)</span>
+        <span class="metric-value" id="fuel-saved-kpi">10.4 Litres</span>
+        <span class="metric-sub positive">36% Route Efficiency Gain</span>
+      </div>
+    </div>
+
+    <div class="metric-card">
+      <div class="metric-icon amber">🛵</div>
+      <div class="metric-content">
+        <span class="metric-label">ASSIGNED ZONE DRIVERS</span>
+        <span class="metric-value">4 Dedicated</span>
+        <span class="metric-sub">North, South, East, West</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Protocol Notice Banner -->
+  <div class="protocol-banner">
+    <div class="protocol-icon">⚡</div>
+    <div class="protocol-text">
+      <strong>Mandatory 7:30 AM Gate Drop SOP:</strong> Deliveries are made exclusively to hostel reception desks or building security gates in under 2 minutes per cluster. Floor climbing and Cash on Delivery are permanently disabled to prevent delivery route collapse.
+    </div>
+  </div>
+
+  <!-- Navigation Tabs -->
+  <nav class="tab-bar">
+    <button class="tab-btn active" data-tab="shops-tab">
+      <span>🏪</span> Partner Tiffin Kitchens & Menus
+    </button>
+    <button class="tab-btn" data-tab="zones-tab">
+      <span>🗺️</span> Khammam 4-Zone Order Heatmap
+    </button>
+    <button class="tab-btn" data-tab="dispatch-tab">
+      <span>📦</span> Live Gate Drop Dispatch Feed
+    </button>
+  </nav>
+
+  <!-- MAIN TAB CONTENT CONTAINER -->
+  <main class="main-content">
+    <!-- TAB 1: KITCHEN SHOPS & MENU MANAGEMENT -->
+    <section id="shops-tab" class="tab-panel active">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Khammam Partner Tiffin Centers</h2>
+          <p class="section-subtitle">Manage daily open/closed status, holiday schedules, closure reasons, and dish pricing.</p>
+        </div>
+        <button class="btn btn-primary" onclick="openAddShopModal()">+ Onboard New Kitchen</button>
+      </div>
+
+      <div class="shops-grid" id="shops-container">
+        <!-- Rendered by JavaScript -->
+      </div>
+    </section>
+
+    <!-- TAB 2: KHAMMAM 4-ZONE HEATMAP & DRIVERS -->
+    <section id="zones-tab" class="tab-panel">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Khammam 4-Zone Route Consolidation</h2>
+          <p class="section-subtitle">Real-time order density tracking to eliminate empty delivery miles and allocate drivers.</p>
+        </div>
+        <div class="zone-filter-pill">Khammam Metropolitan Area</div>
+      </div>
+
+      <div class="zones-grid" id="zones-container">
+        <!-- Rendered by JavaScript -->
+      </div>
+    </section>
+
+    <!-- TAB 3: LIVE GATE DROP FEED -->
+    <section id="dispatch-tab" class="tab-panel">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Morning Gate Drop Dispatch Feed</h2>
+          <p class="section-subtitle">Live status tracking of cluster deliveries, arrival timestamps, and photo proofs.</p>
+        </div>
+        <button class="btn btn-secondary" onclick="renderDispatchFeed()">↻ Refresh Logs</button>
+      </div>
+
+      <div class="dispatch-feed" id="dispatch-container">
+        <!-- Rendered by JavaScript -->
+      </div>
+    </section>
+  </main>
+
+  <!-- EDIT SHOP MODAL -->
+  <div class="modal-overlay" id="edit-shop-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title" id="edit-modal-title">Manage Kitchen Status</h3>
+        <button class="modal-close" onclick="closeEditShopModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="edit-shop-id">
+
+        <div class="form-group">
+          <label>Operational Status:</label>
+          <select id="edit-shop-status" onchange="toggleClosureFields()">
+            <option value="open">🟢 Open for Tomorrow's Drop</option>
+            <option value="closedToday">🟡 Closed Today (Reopens Tomorrow)</option>
+            <option value="closedTemporary">🔴 Closed Temporarily (2-3 Days)</option>
+            <option value="permanentlyClosed">⚫ Permanently Closed</option>
+          </select>
+        </div>
+
+        <div class="form-group" id="closure-reason-group">
+          <label>Reason for Closure (Shown to Students):</label>
+          <input type="text" id="edit-shop-reason" placeholder="e.g. Kitchen renovation / Temple holiday / Family function">
+        </div>
+
+        <div class="form-group" id="reopen-date-group">
+          <label>Expected Reopening Schedule:</label>
+          <input type="text" id="edit-shop-reopen" placeholder="e.g. Tomorrow at 6:00 AM or Thursday, 14 Nov">
+        </div>
+
+        <h4 style="margin: 16px 0 8px; font-size: 14px; font-weight: 700;">Dishes & Live Pricing:</h4>
+        <div id="edit-shop-dishes" class="dishes-edit-list">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeEditShopModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveShopChanges()">Save & Broadcast Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD SHOP MODAL -->
+  <div class="modal-overlay" id="add-shop-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">Onboard New Khammam Tiffin Hub</h3>
+        <button class="modal-close" onclick="closeAddShopModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Kitchen / Center Name:</label>
+          <input type="text" id="add-shop-name" placeholder="e.g. Sri Balaji Tiffins">
+        </div>
+        <div class="form-group">
+          <label>Signature Specialty / Tagline:</label>
+          <input type="text" id="add-shop-tagline" placeholder="e.g. Crisp Karam Dosa & Ghee Idli">
+        </div>
+        <div class="form-group">
+          <label>Khammam Sector Zone:</label>
+          <select id="add-shop-zone">
+            <option value="Khammam North (Bypass Road)">Khammam North (Bypass Road)</option>
+            <option value="Khammam South (Wyra Road)">Khammam South (Wyra Road)</option>
+            <option value="Khammam East (Bus Stand)">Khammam East (Bus Stand)</option>
+            <option value="Khammam West (Gandhi Chowk)">Khammam West (Gandhi Chowk)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Full Address / Landmark:</label>
+          <input type="text" id="add-shop-address" placeholder="e.g. Opposite RTC Bus Stand, Khammam">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeAddShopModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveNewShop()">Onboard Kitchen</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="app-footer">
+    <p>Hungr Operations Command • Khammam City Operations • Sub-2-Minute Gate Drop Engine</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

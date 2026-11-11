@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="splash_morning_white">#F8F9FA</color>
+    <color name="obsidian_dark">#0B0C10</color>
+    <color name="matte_charcoal">#14161D</color>
+    <color name="saffron_primary">#FF6B00</color>
+    <color name="saffron_glow">#FFA34D</color>
+    <color name="neon_mint">#10B981</color>
+</resources>
