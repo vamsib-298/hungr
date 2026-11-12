@@ -139,9 +139,18 @@ class _DriverManifestScreenState extends ConsumerState<DriverManifestScreen> {
                         SnackBar(
                           backgroundColor: const Color(0xFF16A34A),
                           behavior: SnackBarBehavior.floating,
-                          content: Text(
-                            'Stop ${stop.stopSequence} successfully marked as DELIVERED AT GATE!',
-                            style: AppTypography.labelLarge.copyWith(color: Colors.white),
+                          duration: const Duration(seconds: 4),
+                          content: Row(
+                            children: [
+                              const Icon(Icons.mark_chat_unread_rounded, color: Colors.white, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Delivered at Gate! 🔔 Automated WhatsApp Alert dispatched to ${stop.customers.length} students with Bag Tokens.',
+                                  style: AppTypography.labelMedium.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       );

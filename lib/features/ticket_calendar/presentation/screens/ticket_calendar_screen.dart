@@ -393,6 +393,23 @@ class _TicketCalendarScreenState extends ConsumerState<TicketCalendarScreen> {
                                           ),
                                         ),
                                       ),
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFEFF6FF),
+                                          borderRadius: AppDimensions.radius8,
+                                          border: Border.all(color: const Color(0xFFBFDBFE)),
+                                        ),
+                                        child: Text(
+                                          ticket.bagToken,
+                                          style: AppTypography.monoBadge.copyWith(
+                                            color: const Color(0xFF1D4ED8),
+                                            fontWeight: FontWeight.w800,
+                                            fontSize: 9.5,
+                                          ),
+                                        ),
+                                      ),
                                       const SizedBox(width: 8),
                                       Flexible(
                                         child: Text(
@@ -441,22 +458,25 @@ class _TicketCalendarScreenState extends ConsumerState<TicketCalendarScreen> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        comboTitle,
+                                        ticket.specialtyName ?? comboTitle,
                                         style: AppTypography.bodyMedium.copyWith(
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 13,
-                                          color: isSkipped ? AppColors.textSubtle : AppColors.textCrispWhite,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 12.5,
+                                          color: isSkipped ? AppColors.textSubtle : AppColors.textPrimary,
                                           decoration: isSkipped ? TextDecoration.lineThrough : null,
                                         ),
+                                        overflow: TextOverflow.ellipsis,
                                       ),
+                                      const SizedBox(height: 1),
                                       Text(
                                         isSkipped
                                             ? 'Pushed to end of subscription'
-                                            : '07:30 AM • ${ticket.clusterName}',
+                                            : '07:30 AM • ${ticket.clusterName}${ticket.companionMeals > 0 ? " • (+${ticket.companionMeals} Roommate Meal)" : ""}',
                                         style: AppTypography.bodySmall.copyWith(
-                                          color: isSkipped ? AppColors.urgentCrimson : AppColors.textMutedSlate,
-                                          fontSize: 10.5,
+                                          color: isSkipped ? AppColors.urgentCrimson : AppColors.textSecondary,
+                                          fontSize: 10,
                                         ),
+                                        overflow: TextOverflow.ellipsis,
                                       ),
                                     ],
                                   ),

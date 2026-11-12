@@ -20,6 +20,7 @@ import '../widgets/pass_card_3d.dart';
 import '../widgets/sticky_cutoff_flip_clock.dart';
 import '../widgets/tiffin_item_card.dart';
 import '../widgets/tiffin_shop_card.dart';
+import '../widgets/live_drop_radar_card.dart';
 import 'shop_details_screen.dart';
 import '../../../subscription/presentation/widgets/viral_referral_banner.dart';
 
@@ -220,6 +221,14 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
                         const ActivePassDashboardCard(),
                         const SizedBox(height: 16),
                       ],
+
+                      // Live Morning Drop Radar (Reverse Engineered from Swiggy / Zomato)
+                      LiveDropRadarCard(
+                        clusterName: customerState.selectedCluster.name,
+                        bagToken: customerState.tickets.isNotEmpty
+                            ? customerState.tickets.first.bagToken
+                            : '#SS-04',
+                      ),
 
                       // Minimal Gate Drop Capacity Pill
                       Container(

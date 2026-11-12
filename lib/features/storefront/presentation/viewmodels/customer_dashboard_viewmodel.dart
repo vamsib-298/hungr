@@ -114,86 +114,63 @@ class CustomerDashboardViewModel extends StateNotifier<CustomerDashboardState> {
     }
   }
 
-  static List<MealTicket> _generateInitialTickets() {
-    final now = DateTimeUtils.nowIst();
-    final tomorrow = DateTime.utc(now.year, now.month, now.day + 1);
+  static const List<String> khammamSpecialties = [
+    'Rayalaseema Set Dosa & Coconut Chutney',
+    'Steaming Ghee Thatte Idlis + Medu Vada',
+    'Homestyle Poori Masala (Amma Chethi Vanta)',
+    'MLA Pesarattu Upma & Ginger Pachadi',
+    'Crisp Mysore Bonda & Drumstick Sambar',
+    'Karnataka Udupi Ghee Roast Dosa',
+  ];
 
-    return [
-      MealTicket(
-        ticketId: 't_001',
+  static List<MealTicket> _generateInitialTickets() {
+    final targetStart = DateTimeUtils.targetDeliveryDate();
+
+    return List<MealTicket>.generate(5, (index) {
+      final deliveryDate = targetStart.add(Duration(days: index));
+      final specialty = khammamSpecialties[index % khammamSpecialties.length];
+      final token = DateTimeUtils.generateBagToken('Sri Sai Boys Hostel Gate', index + 4);
+
+      return MealTicket(
+        ticketId: 't_00${index + 1}',
         passId: 'pass_7d_user1',
         userId: 'user_khammam_01',
         clusterId: 'cluster_01',
         clusterName: 'Sri Sai Boys Hostel Gate',
-        deliveryDate: tomorrow,
-        comboSelection: 'A',
-        addOns: const [BusinessRules.addonBoiledEggsId],
+        deliveryDate: deliveryDate,
+        comboSelection: index % 2 == 0 ? 'A' : 'B',
+        addOns: index == 0 ? const [BusinessRules.addonBoiledEggsId] : const [],
         slot: MealSlotType.morning,
         status: TicketStatusType.scheduled,
-      ),
-      MealTicket(
-        ticketId: 't_002',
-        passId: 'pass_7d_user1',
-        userId: 'user_khammam_01',
-        clusterId: 'cluster_01',
-        clusterName: 'Sri Sai Boys Hostel Gate',
-        deliveryDate: tomorrow.add(const Duration(days: 1)),
-        comboSelection: 'B',
-        addOns: const [BusinessRules.addonFilterCoffeeId],
-        slot: MealSlotType.morning,
-        status: TicketStatusType.scheduled,
-      ),
-      MealTicket(
-        ticketId: 't_003',
-        passId: 'pass_7d_user1',
-        userId: 'user_khammam_01',
-        clusterId: 'cluster_01',
-        clusterName: 'Sri Sai Boys Hostel Gate',
-        deliveryDate: tomorrow.add(const Duration(days: 2)),
-        comboSelection: 'A',
-        slot: MealSlotType.morning,
-        status: TicketStatusType.scheduled,
-      ),
-      MealTicket(
-        ticketId: 't_004',
-        passId: 'pass_7d_user1',
-        userId: 'user_khammam_01',
-        clusterId: 'cluster_01',
-        clusterName: 'Sri Sai Boys Hostel Gate',
-        deliveryDate: tomorrow.add(const Duration(days: 3)),
-        comboSelection: 'B',
-        slot: MealSlotType.morning,
-        status: TicketStatusType.scheduled,
-      ),
-      MealTicket(
-        ticketId: 't_005',
-        passId: 'pass_7d_user1',
-        userId: 'user_khammam_01',
-        clusterId: 'cluster_01',
-        clusterName: 'Sri Sai Boys Hostel Gate',
-        deliveryDate: tomorrow.add(const Duration(days: 4)),
-        comboSelection: 'A',
-        slot: MealSlotType.morning,
-        status: TicketStatusType.scheduled,
-      ),
-    ];
+        bagToken: token,
+        specialtyName: specialty,
+        companionMeals: 0,
+      );
+    });
   }
 
   void activateNewPass({
     required PassTierType tier,
     required String combo,
     required Set<String> addons,
+    bool autoRotateSpecialties = true,
+    int companionMeals = 0,
+    String? bagToken,
   }) {
     int total = 7;
     if (tier == PassTierType.trial3Day) total = 3;
     if (tier == PassTierType.power15Day) total = 15;
 
-    final now = DateTimeUtils.nowIst();
-    final tomorrow = DateTime.utc(now.year, now.month, now.day + 1);
+    final targetStart = DateTimeUtils.targetDeliveryDate();
+    final baseToken = bagToken ?? DateTimeUtils.generateBagToken(state.selectedCluster.name, 7);
 
     final generatedTickets = List<MealTicket>.generate(total, (index) {
-      final deliveryDate = tomorrow.add(Duration(days: index));
+      final deliveryDate = targetStart.add(Duration(days: index));
       final ticketCombo = (index % 2 == 0) ? combo : (combo == 'A' ? 'B' : 'A');
+      final specialty = autoRotateSpecialties
+          ? khammamSpecialties[index % khammamSpecialties.length]
+          : (ticketCombo == 'A' ? 'Steaming Ghee Idli + Vada' : 'Crisp Masala Dosa');
+
       return MealTicket(
         ticketId: 't_${DateTime.now().millisecondsSinceEpoch}_$index',
         passId: 'pass_${tier.name}_user1',
@@ -205,6 +182,9 @@ class CustomerDashboardViewModel extends StateNotifier<CustomerDashboardState> {
         addOns: addons.toList(),
         slot: MealSlotType.morning,
         status: TicketStatusType.scheduled,
+        bagToken: baseToken,
+        specialtyName: specialty,
+        companionMeals: index == 0 ? companionMeals : 0,
       );
     });
 

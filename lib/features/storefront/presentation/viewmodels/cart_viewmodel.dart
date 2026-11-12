@@ -20,6 +20,8 @@ class CartState {
   final int discountAmount;
   final String deliveryInstructions;
   final String paymentMethod;
+  final int roommateMealCount; // +₹45 Companion Meal (Same Gate Bag)
+  final bool autoRotatePassMenu; // Auto-rotate 6 authentic Khammam specialties
 
   const CartState({
     this.orderMode = OrderMode.singleDay,
@@ -31,9 +33,14 @@ class CartState {
     this.discountAmount = 0,
     this.deliveryInstructions = '',
     this.paymentMethod = 'Google Pay',
+    this.roommateMealCount = 0,
+    this.autoRotatePassMenu = true,
   });
 
   factory CartState.initial() => const CartState();
+
+  /// Total cost of companion roommate meals (₹45 each, instead of ₹59)
+  int get roommateSubtotal => roommateMealCount * 45;
 
   /// Subtotal for individual single-day menu items & addons
   int get itemsSubtotal {
@@ -44,7 +51,7 @@ class CartState {
         sum += item.price * entry.value;
       }
     }
-    return sum;
+    return sum + roommateSubtotal;
   }
 
   /// Price of selected subscription pass tier
@@ -79,7 +86,10 @@ class CartState {
       }
     }
 
-    return itemSavings + passSavings + discountAmount;
+    // Companion meal discount savings (₹59 regular vs ₹45 roommate meal)
+    final roommateSavings = roommateMealCount * 14;
+
+    return itemSavings + passSavings + discountAmount + roommateSavings;
   }
 
   /// Final payable amount after deducting active coupon discounts
@@ -94,15 +104,15 @@ class CartState {
 
   /// Total count of individual items selected in the cart
   int get totalItemCount {
-    return itemQuantities.values.fold(0, (sum, qty) => sum + qty);
+    return itemQuantities.values.fold(0, (sum, qty) => sum + qty) + roommateMealCount;
   }
 
   /// Whether cart currently has any items or a valid pass configured
   bool get isEmpty {
     if (orderMode == OrderMode.subscriptionPass) {
-      return selectedPassTier == null && itemQuantities.isEmpty;
+      return selectedPassTier == null && itemQuantities.isEmpty && roommateMealCount == 0;
     }
-    return itemQuantities.isEmpty;
+    return itemQuantities.isEmpty && roommateMealCount == 0;
   }
 
   CartState copyWith({
@@ -117,6 +127,8 @@ class CartState {
     int? discountAmount,
     String? deliveryInstructions,
     String? paymentMethod,
+    int? roommateMealCount,
+    bool? autoRotatePassMenu,
   }) {
     return CartState(
       orderMode: orderMode ?? this.orderMode,
@@ -131,6 +143,8 @@ class CartState {
       deliveryInstructions:
           deliveryInstructions ?? this.deliveryInstructions,
       paymentMethod: paymentMethod ?? this.paymentMethod,
+      roommateMealCount: roommateMealCount ?? this.roommateMealCount,
+      autoRotatePassMenu: autoRotatePassMenu ?? this.autoRotatePassMenu,
     );
   }
 }
@@ -138,6 +152,23 @@ class CartState {
 /// StateNotifier orchestrating cart operations, item quantities, coupons, and checkout setup
 class CartViewModel extends StateNotifier<CartState> {
   CartViewModel() : super(CartState.initial());
+
+  /// Increase roommate companion meal count (+₹45, same bag drop)
+  void addRoommateMeal() {
+    state = state.copyWith(roommateMealCount: state.roommateMealCount + 1);
+  }
+
+  /// Decrease roommate companion meal count
+  void removeRoommateMeal() {
+    if (state.roommateMealCount > 0) {
+      state = state.copyWith(roommateMealCount: state.roommateMealCount - 1);
+    }
+  }
+
+  /// Toggle smart pass menu auto-rotation
+  void toggleAutoRotatePassMenu(bool value) {
+    state = state.copyWith(autoRotatePassMenu: value);
+  }
 
   /// Increase item quantity by 1
   void addItem(String itemId) {

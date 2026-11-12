@@ -8,6 +8,7 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_dimensions.dart';
 import '../../../../core/constants/app_typography.dart';
 import '../../../../core/router/route_names.dart';
+import '../../../../core/utils/date_time_utils.dart';
 import '../../../../core/widgets/confetti_burst_overlay.dart';
 import '../../../subscription/presentation/viewmodels/subscription_history_viewmodel.dart';
 import '../../../subscription/presentation/viewmodels/referral_viewmodel.dart';
@@ -71,6 +72,8 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     _confettiKey.currentState?.burstAtCenter();
 
     final isSingleDay = cartState.orderMode == OrderMode.singleDay;
+    final bagToken = DateTimeUtils.generateBagToken(customerState.selectedCluster.name, 4);
+    final targetDateLabel = DateTimeUtils.targetDeliveryLabel();
 
     if (isSingleDay) {
       // Single-Day Tiffin Order: Create a fresh single-day ticket in the dashboard
@@ -79,6 +82,8 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
             tier: PassTierType.trial3Day,
             combo: 'A',
             addons: selectedItems.toSet(),
+            companionMeals: cartState.roommateMealCount,
+            bagToken: bagToken,
           );
     } else {
       // Pass Order: Activate Pass in Dashboard
@@ -87,6 +92,9 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
             tier: tier,
             combo: 'A',
             addons: cartState.itemQuantities.keys.toSet(),
+            autoRotateSpecialties: cartState.autoRotatePassMenu,
+            companionMeals: cartState.roommateMealCount,
+            bagToken: bagToken,
           );
 
       // Record in Subscription History
@@ -128,13 +136,70 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
               style: AppTypography.headlineMedium.copyWith(color: AppColors.textPrimary),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
+            // Parcel Bag Token Badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF93C5FD)),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    'YOUR PARCEL BAG TOKEN',
+                    style: AppTypography.monoBadge.copyWith(
+                      color: const Color(0xFF1D4ED8),
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    bagToken,
+                    style: AppTypography.headlineLarge.copyWith(
+                      color: const Color(0xFF1E40AF),
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
             Text(
-              'Your hot tiffin will arrive tomorrow at ${cartState.selectedDeliverySlot} at ${customerState.selectedCluster.name}.',
-              style: AppTypography.bodyMedium.copyWith(color: AppColors.textSecondary),
+              'Your breakfast arrives on $targetDateLabel at ${cartState.selectedDeliverySlot} at ${customerState.selectedCluster.name}.',
+              style: AppTypography.bodyMedium.copyWith(color: AppColors.textSecondary, fontSize: 12),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 10),
+            // WhatsApp Gate Drop Alert Pill
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0FDF4),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFBBF7D0)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.mark_chat_unread_rounded, size: 16, color: Color(0xFF16A34A)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Automated WhatsApp Drop Alert will ping you the moment Bag $bagToken is placed at the gate security desk.',
+                      style: AppTypography.caption.copyWith(
+                        color: const Color(0xFF15803D),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
             SizedBox(
               width: double.infinity,
               height: 48,
@@ -268,6 +333,13 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                               .slideY(begin: 0.06, end: 0, curve: Curves.easeOutCubic),
                           const SizedBox(height: 12),
                         ],
+
+                        // 4B. Roommate Split & Save Companion Drop (Slot 4B: 160ms)
+                        _buildRoommateCompanionCard(cartState, cartNotifier)
+                            .animate()
+                            .fadeIn(delay: 160.ms, duration: 250.ms)
+                            .slideY(begin: 0.06, end: 0, curve: Curves.easeOutCubic),
+                        const SizedBox(height: 12),
 
                         // 5. Promo Code & Offers (Slot 5: 180ms)
                         _buildPromoSection(cartState, cartNotifier)
@@ -405,6 +477,23 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                         ),
                       ),
                     ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEFF6FF),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: const Color(0xFFBFDBFE)),
+                      ),
+                      child: Text(
+                        DateTimeUtils.generateBagToken(customerState.selectedCluster.name, 4),
+                        style: AppTypography.monoBadge.copyWith(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF1D4ED8),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 3),
@@ -482,14 +571,34 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Icon(Icons.access_time_rounded, size: 16, color: AppColors.goldenAmber),
-              const SizedBox(width: 6),
-              Text(
-                'Select Morning Delivery Slot',
-                style: AppTypography.titleSmall.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
+              Row(
+                children: [
+                  const Icon(Icons.access_time_rounded, size: 16, color: AppColors.goldenAmber),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Select Morning Delivery Slot',
+                    style: AppTypography.titleSmall.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF3F4F6),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  DateTimeUtils.targetDeliveryLabel(),
+                  style: AppTypography.caption.copyWith(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 9.5,
+                    color: AppColors.zomatoRed,
+                  ),
                 ),
               ),
             ],
@@ -752,6 +861,49 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                 ),
               ),
             ],
+            // 1-Tap Smart Pass Menu Auto-Rotation
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF9FAFB),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.charcoalBorder),
+              ),
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: cartState.autoRotatePassMenu,
+                    activeColor: AppColors.zomatoRed,
+                    onChanged: (val) {
+                      HapticFeedback.selectionClick();
+                      cartNotifier.toggleAutoRotatePassMenu(val ?? true);
+                    },
+                  ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Auto-Rotate Authentic Khammam Variety',
+                          style: AppTypography.labelSmall.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        Text(
+                          'Mon: Set Dosa • Tue: Thatte Idli • Wed: Poori • Thu: Pesarattu • Fri: Bonda • Sat: Udupi Dosa',
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.textSecondary,
+                            fontSize: 9.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ],
       ),
@@ -864,6 +1016,143 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
               }).toList(),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRoommateCompanionCard(CartState cartState, CartViewModel cartNotifier) {
+    final bool hasCompanion = cartState.roommateMealCount > 0;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: hasCompanion ? const Color(0xFFEFF6FF) : Colors.white,
+        borderRadius: AppDimensions.radius16,
+        border: Border.all(
+          color: hasCompanion ? const Color(0xFF93C5FD) : AppColors.charcoalBorder,
+          width: hasCompanion ? 1.4 : 1.0,
+        ),
+        boxShadow: const [
+          BoxShadow(color: Color(0x08000000), blurRadius: 8, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFDBEAFE),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.people_alt_rounded, size: 20, color: Color(0xFF1D4ED8)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'Roommate Split & Save',
+                      style: AppTypography.titleSmall.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDCFCE7),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        'SAVE ₹14',
+                        style: AppTypography.caption.copyWith(
+                          fontSize: 8.5,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF15803D),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Add roommate breakfast for +₹45 (instead of ₹59) • Packed in same gate bag',
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.textSecondary,
+                    fontSize: 10.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (!hasCompanion)
+            ElevatedButton(
+              onPressed: () {
+                HapticFeedback.lightImpact();
+                cartNotifier.addRoommateMeal();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.zomatoRed,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                minimumSize: const Size(0, 32),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: Text(
+                '+ Add (₹45)',
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 11,
+                ),
+              ),
+            )
+          else
+            Container(
+              height: 32,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF93C5FD)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  InkWell(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      cartNotifier.removeRoommateMeal();
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 8),
+                      child: Icon(Icons.remove, size: 14, color: Color(0xFF1D4ED8)),
+                    ),
+                  ),
+                  Text(
+                    '${cartState.roommateMealCount}',
+                    style: AppTypography.labelSmall.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF1D4ED8),
+                    ),
+                  ),
+                  InkWell(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      cartNotifier.addRoommateMeal();
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 8),
+                      child: Icon(Icons.add, size: 14, color: Color(0xFF1D4ED8)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
@@ -1295,6 +1584,45 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
               Text('FREE', style: AppTypography.caption.copyWith(color: AppColors.neonMint, fontWeight: FontWeight.bold)),
             ],
           ),
+          if (cartState.roommateMealCount > 0) ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'Roommate Companion (${cartState.roommateMealCount}x)',
+                      style: AppTypography.bodySmall.copyWith(color: const Color(0xFF1D4ED8), fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '(₹45/meal)',
+                      style: AppTypography.caption.copyWith(color: AppColors.textSubtle, fontSize: 10),
+                    ),
+                  ],
+                ),
+                Text(
+                  '+₹${cartState.roommateSubtotal}',
+                  style: AppTypography.titleSmall.copyWith(color: const Color(0xFF1D4ED8), fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Roommate Split Savings',
+                  style: AppTypography.bodySmall.copyWith(color: AppColors.neonMint, fontSize: 13),
+                ),
+                Text(
+                  '-₹${cartState.roommateMealCount * 14}',
+                  style: AppTypography.titleSmall.copyWith(color: AppColors.neonMint, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+          ],
           if (cartState.discountAmount > 0) ...[
             const SizedBox(height: 8),
             Row(

@@ -75,8 +75,13 @@ class _CutoffFlipClockWidgetState extends State<CutoffFlipClockWidget> {
     final minutes = (_remaining.inMinutes % 60).toString().padLeft(2, '0');
     final seconds = (_remaining.inSeconds % 60).toString().padLeft(2, '0');
 
-    final primaryAccent = _isUrgent ? AppColors.urgentCrimson : AppColors.electricSaffron;
-    final glowColor = _isUrgent ? AppColors.urgentCrimsonGlow : AppColors.saffronGlow;
+    final isRollover = DateTimeUtils.isAfterCutoffToday();
+    final primaryAccent = isRollover
+        ? AppColors.neonMint
+        : (_isUrgent ? AppColors.urgentCrimson : AppColors.electricSaffron);
+    final glowColor = isRollover
+        ? const Color(0x3310B981)
+        : (_isUrgent ? AppColors.urgentCrimsonGlow : AppColors.saffronGlow);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: AppDimensions.p16),
@@ -123,7 +128,9 @@ class _CutoffFlipClockWidgetState extends State<CutoffFlipClockWidget> {
                       const SizedBox(width: AppDimensions.p8),
                       Flexible(
                         child: Text(
-                          _isUrgent ? 'URGENT 9:00 PM LOCK' : '9:00 PM HARD CUTOFF',
+                          isRollover
+                              ? 'SLOT ROLLOVER ACTIVE'
+                              : (_isUrgent ? 'URGENT 9:00 PM LOCK' : '9:00 PM HARD CUTOFF'),
                           style: AppTypography.labelSmall.copyWith(
                             color: primaryAccent,
                             fontWeight: FontWeight.w700,
@@ -136,10 +143,16 @@ class _CutoffFlipClockWidgetState extends State<CutoffFlipClockWidget> {
                   ),
                   const SizedBox(height: AppDimensions.p4),
                   Text(
-                    _isUrgent
-                      ? 'Orders lock in 30 mins'
-                      : 'Next batch locks at 21:00 IST',
-                    style: AppTypography.bodySmall,
+                    isRollover
+                        ? 'Now booking for ${DateTimeUtils.targetDeliveryLabel()}'
+                        : (_isUrgent
+                            ? 'Tomorrow\'s batch locks in 30 mins'
+                            : 'Tomorrow\'s woodfire batch locks at 21:00 IST'),
+                    style: AppTypography.bodySmall.copyWith(
+                      color: isRollover ? AppColors.textPrimary : AppColors.textSecondary,
+                      fontWeight: isRollover ? FontWeight.w600 : FontWeight.normal,
+                      fontSize: 10.5,
+                    ),
                     overflow: TextOverflow.ellipsis,
                     maxLines: 1,
                   ),

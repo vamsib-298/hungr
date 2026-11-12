@@ -55,4 +55,58 @@ class DateTimeUtils {
     );
     return now.isBefore(cutoffToday);
   }
+
+  /// Whether current time is past 9:00 PM today (tomorrow's batch is locked for woodfire prep)
+  static bool isAfterCutoffToday() {
+    return !canModifyTomorrowMeal();
+  }
+
+  /// Calculates the next guaranteed delivery date:
+  /// - Before 9:00 PM IST: Tomorrow Morning
+  /// - After 9:00 PM IST: Next-to-Next Day Morning (Day + 2)
+  static DateTime targetDeliveryDate() {
+    final now = nowIst();
+    if (isAfterCutoffToday()) {
+      return DateTime(now.year, now.month, now.day).add(const Duration(days: 2));
+    } else {
+      return DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
+    }
+  }
+
+  static const List<String> _dayNames = [
+    'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
+  ];
+
+  static const List<String> _monthNames = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  ];
+
+  /// Human-readable target delivery day label
+  static String targetDeliveryLabel() {
+    final target = targetDeliveryDate();
+    final now = nowIst();
+    final tomorrow = now.add(const Duration(days: 1));
+    final dayStr = _dayNames[target.weekday - 1];
+    final monthStr = _monthNames[target.month - 1];
+
+    if (target.day == tomorrow.day && target.month == tomorrow.month) {
+      return 'Tomorrow Morning ($dayStr, ${target.day} $monthStr)';
+    } else {
+      return '$dayStr Morning (${target.day} $monthStr)';
+    }
+  }
+
+  /// Generates a deterministic 4-character parcel bag token (#SS-04)
+  /// Used by security guards and hostel students to identify bags instantly.
+  static String generateBagToken(String clusterName, [int seed = 4]) {
+    final words = clusterName.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    String prefix = 'TS';
+    if (words.length >= 2) {
+      prefix = '${words[0][0]}${words[1][0]}'.toUpperCase();
+    } else if (words.isNotEmpty && words[0].length >= 2) {
+      prefix = words[0].substring(0, 2).toUpperCase();
+    }
+    final numStr = (seed % 99 + 1).toString().padLeft(2, '0');
+    return '#$prefix-$numStr';
+  }
 }

@@ -25,6 +25,9 @@ class MealTicket {
   final TicketStatusType status;
   final String? dropProofImageUrl;
   final DateTime? deliveredAt;
+  final String bagToken; // e.g. '#SS-04'
+  final String? specialtyName; // e.g. 'Rayalaseema Set Dosa'
+  final int companionMeals; // Roommate companion meals
 
   const MealTicket({
     required this.ticketId,
@@ -41,6 +44,9 @@ class MealTicket {
     this.status = TicketStatusType.scheduled,
     this.dropProofImageUrl,
     this.deliveredAt,
+    this.bagToken = '#TS-04',
+    this.specialtyName,
+    this.companionMeals = 0,
   });
 
   MealTicket copyWith({
@@ -51,6 +57,9 @@ class MealTicket {
     String? assignedDriverId,
     String? dropProofImageUrl,
     DateTime? deliveredAt,
+    String? bagToken,
+    String? specialtyName,
+    int? companionMeals,
   }) {
     return MealTicket(
       ticketId: ticketId,
@@ -67,6 +76,9 @@ class MealTicket {
       status: status ?? this.status,
       dropProofImageUrl: dropProofImageUrl ?? this.dropProofImageUrl,
       deliveredAt: deliveredAt ?? this.deliveredAt,
+      bagToken: bagToken ?? this.bagToken,
+      specialtyName: specialtyName ?? this.specialtyName,
+      companionMeals: companionMeals ?? this.companionMeals,
     );
   }
 
