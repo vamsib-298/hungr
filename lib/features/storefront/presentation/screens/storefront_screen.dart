@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:animations/animations.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_dimensions.dart';
 import '../../../../core/constants/app_typography.dart';
@@ -19,6 +20,7 @@ import '../widgets/pass_card_3d.dart';
 import '../widgets/sticky_cutoff_flip_clock.dart';
 import '../widgets/tiffin_item_card.dart';
 import '../widgets/tiffin_shop_card.dart';
+import 'shop_details_screen.dart';
 import '../../../subscription/presentation/widgets/viral_referral_banner.dart';
 
 /// Flagship Storefront Screen (Morning Porcelain & Crimson Theme)
@@ -533,11 +535,34 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
                         ),
                         const SizedBox(height: 12),
 
-                        // Swiggy/Zomato Auto-Scrolling Cards
+                        // Swiggy/Zomato Auto-Scrolling Cards with Fluid Morph Bounds Transitions
                         ...shops.map((shop) {
-                          return TiffinShopCard(
-                            shop: shop,
-                            onTap: () => context.push(RouteNames.shopDetails, extra: shop.id),
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 18),
+                            child: OpenContainer(
+                              transitionType: ContainerTransitionType.fadeThrough,
+                              transitionDuration: const Duration(milliseconds: 480),
+                              openElevation: 0,
+                              closedElevation: 0,
+                              closedColor: Colors.transparent,
+                              openColor: Colors.white,
+                              middleColor: Colors.white,
+                              closedShape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              openShape: const RoundedRectangleBorder(
+                                borderRadius: BorderRadius.zero,
+                              ),
+                              closedBuilder: (context, openContainer) {
+                                return TiffinShopCard(
+                                  shop: shop,
+                                  onTap: openContainer,
+                                );
+                              },
+                              openBuilder: (context, closeContainer) {
+                                return ShopDetailsScreen(shopId: shop.id);
+                              },
+                            ),
                           );
                         }),
 

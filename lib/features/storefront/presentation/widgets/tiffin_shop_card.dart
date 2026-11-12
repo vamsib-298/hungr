@@ -60,7 +60,6 @@ class _TiffinShopCardState extends State<TiffinShopCard> {
     final bool isClosed = !shop.isOpen;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 18),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: AppDimensions.radius16,

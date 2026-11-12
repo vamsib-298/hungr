@@ -409,7 +409,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'HUNGR v1.0.7 (Build 8)',
+                    'HUNGR v1.0.8 (Build 9)',
                     style: AppTypography.monoBadge.copyWith(
                       color: AppColors.textSubtle,
                       fontSize: 11,
