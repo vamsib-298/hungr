@@ -14,10 +14,6 @@ class RouteNames {
   static const String passCheckout = '/storefront/checkout';
   static const String ticketCalendar = '/tickets';
 
-  // Driver Dispatch Module
-  static const String driverManifest = '/driver/manifest';
-  static const String driverStopProof = '/driver/stop-proof';
-
   // Profile & Compliance
   static const String profile = '/profile';
   static const String referral = '/profile/referral';

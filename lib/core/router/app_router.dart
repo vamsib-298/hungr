@@ -10,7 +10,6 @@ import '../../features/storefront/presentation/screens/storefront_screen.dart';
 import '../../features/storefront/presentation/screens/shop_details_screen.dart';
 import '../../features/storefront/presentation/screens/checkout_screen.dart';
 import '../../features/ticket_calendar/presentation/screens/ticket_calendar_screen.dart';
-import '../../features/driver_dispatch/presentation/screens/driver_manifest_screen.dart';
 import '../../features/profile/presentation/screens/profile_screen.dart';
 import '../../features/profile/presentation/screens/legal_policy_screen.dart';
 import '../../features/subscription/presentation/screens/subscription_history_screen.dart';
@@ -133,14 +132,6 @@ class AppRouter {
             child: TicketCalendarScreen(highlightToken: token),
           );
         },
-      ),
-      GoRoute(
-        path: RouteNames.driverManifest,
-        pageBuilder: (context, state) => SmoothTransitions.stackSlide(
-          context: context,
-          state: state,
-          child: const DriverManifestScreen(),
-        ),
       ),
       GoRoute(
         path: RouteNames.otpVerify,

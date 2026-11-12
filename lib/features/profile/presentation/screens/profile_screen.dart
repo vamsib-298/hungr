@@ -348,14 +348,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   ),
                   const Divider(color: AppColors.surfaceHighlight),
                   ListTile(
-                    leading: const Icon(Icons.delivery_dining_outlined, color: AppColors.neonMint),
-                    title: Text('Driver Dispatch Portal', style: AppTypography.titleMedium),
-                    subtitle: Text('Cluster gate manifest & photo drop', style: AppTypography.bodySmall),
-                    trailing: const Icon(Icons.chevron_right, color: AppColors.textSubtle),
-                    onTap: () => context.push(RouteNames.driverManifest),
-                  ),
-                  const Divider(color: AppColors.surfaceHighlight),
-                  ListTile(
                     leading: const Icon(Icons.gavel_outlined, color: AppColors.textPrimary),
                     title: Text('Terms & Privacy Policy', style: AppTypography.titleMedium),
                     subtitle: Text('DPDP Act, 9:00 PM cutoff, Gate drop SOP', style: AppTypography.bodySmall),

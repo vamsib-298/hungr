@@ -297,7 +297,10 @@ function renderZones() {
           <p class="driver-name">🛵 Driver: ${zone.driver}</p>
           <p class="driver-phone">${zone.vehicle} • ${zone.phone}</p>
         </div>
-        <button class="btn btn-secondary btn-sm" onclick="alert('Calling Driver ${zone.driver} (${zone.phone})...')">Call Driver</button>
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-secondary btn-sm" onclick="alert('Calling Driver ${zone.driver} (${zone.phone})...')">Call</button>
+          <button class="btn btn-primary btn-sm" onclick="openDriverManifestModal('${zone.id}')">📋 Manifest</button>
+        </div>
       </div>
 
       <p class="route-desc">Consolidated Route: ${zone.route}</p>
@@ -449,6 +452,67 @@ function saveNewShop() {
   broadcastKitchenUpdate('ADD_NEW_SHOP', newShop);
   closeAddShopModal();
   alert(`Onboarded ${name} successfully!`);
+}
+
+// Driver Manifest Modal Controls for Operations Web App
+function openDriverManifestModal(zoneId) {
+  const zone = ZONES.find(z => z.id === zoneId);
+  if (!zone) return;
+
+  document.getElementById('manifest-modal-title').innerText = `Delivery Manifest • ${zone.driver} (${zone.name})`;
+  const container = document.getElementById('manifest-modal-body');
+  
+  let stopsHtml = `
+    <div style="background:#F9FAFB; padding:12px; border-radius:8px; margin-bottom:14px; font-size:12px; border:1px solid #E5E7EB;">
+      <strong>Driver:</strong> ${zone.driver} • <strong>Vehicle:</strong> ${zone.vehicle}<br>
+      <strong>Phone:</strong> ${zone.phone} • <strong>Consolidated Orders:</strong> ${zone.orders} Meals<br>
+      <strong>Drop Target:</strong> Security Desk by 7:30 AM (Sub-2-min gate drop)
+    </div>
+    <h4 style="font-size:13px; font-weight:700; margin-bottom:10px;">Cluster Delivery Stops & Bag Tokens:</h4>
+  `;
+
+  if (zone.clusters && zone.clusters.length > 0) {
+    zone.clusters.forEach((cluster, idx) => {
+      stopsHtml += `
+        <div style="background:white; border:1px solid #E5E7EB; border-radius:8px; padding:12px; margin-bottom:10px; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <div>
+              <span style="background:${zone.color}; color:white; font-size:10px; font-weight:800; padding:2px 7px; border-radius:4px;">${cluster.token}</span>
+              <strong style="margin-left:8px; font-size:13px;">Stop ${idx + 1}: ${cluster.name}</strong>
+            </div>
+            <span style="font-size:11px; font-weight:700; color:#111827;">${cluster.meals} Breakfast Bags</span>
+          </div>
+          <p style="font-size:11px; color:#4B5563; margin-bottom:8px;">Drop Location: Hostel Main Gate / Security Reception Desk</p>
+          <button class="btn btn-secondary btn-sm" onclick="copyWhatsAppAlert('${cluster.token}', '${cluster.name}', '${zone.driver}')">
+            📲 Copy 1-Tap WhatsApp Gate Drop Alert
+          </button>
+        </div>
+      `;
+    });
+  } else {
+    stopsHtml += `<p style="color:#6B7280; font-size:12px;">No cluster stops assigned.</p>`;
+  }
+
+  container.innerHTML = stopsHtml;
+  document.getElementById('driver-manifest-modal').classList.add('open');
+}
+
+function closeDriverManifestModal() {
+  document.getElementById('driver-manifest-modal').classList.remove('open');
+}
+
+function copyWhatsAppAlert(token, clusterName, driverName) {
+  const msg = `🔔 *HOT BREAKFAST DROPPED AT YOUR GATE!* 🔔\n\nYour morning tiffin parcel is ready!\n🏷️ *Bag Token:* *${token}*\n📍 *Location:* ${clusterName} (Security Desk)\n⏰ *Drop Time:* 07:34 AM IST\n🛵 *Delivered By:* ${driverName}\n♨️ *Heat Freshness:* Best consumed within 30 mins!\n\n👉 *View Parcel Drop Proof:* hungr://drop/${token.replace('#','')}\n\n_Hungr delivers strictly to hostel security reception to guarantee on-time morning arrival._`;
+  
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(msg).then(() => {
+      alert(`WhatsApp alert message for Bag ${token} copied to clipboard! Paste directly into student chat.`);
+    }).catch(() => {
+      alert(`Bag Token: ${token} at ${clusterName}`);
+    });
+  } else {
+    alert(`Bag Token: ${token} at ${clusterName}`);
+  }
 }
 
 // 8. Tab Navigation Logic
