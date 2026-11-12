@@ -9,10 +9,18 @@ import '../../../../core/constants/app_typography.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/widgets/obsidian_card.dart';
 import '../../../storefront/presentation/viewmodels/customer_dashboard_viewmodel.dart';
+import '../../../storefront/presentation/widgets/gate_heat_preservation_card.dart';
 import '../../domain/meal_ticket_model.dart';
 
 class TicketCalendarScreen extends ConsumerStatefulWidget {
-  const TicketCalendarScreen({super.key});
+  final String? highlightTicketId;
+  final String? highlightToken;
+
+  const TicketCalendarScreen({
+    super.key,
+    this.highlightTicketId,
+    this.highlightToken,
+  });
 
   @override
   ConsumerState<TicketCalendarScreen> createState() => _TicketCalendarScreenState();
@@ -20,6 +28,98 @@ class TicketCalendarScreen extends ConsumerStatefulWidget {
 
 class _TicketCalendarScreenState extends ConsumerState<TicketCalendarScreen> {
   int _filterIndex = 0; // 0: All, 1: Scheduled, 2: Paused
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.highlightTicketId != null || widget.highlightToken != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _showDeepLinkedDropProof();
+      });
+    }
+  }
+
+  void _showDeepLinkedDropProof() {
+    final token = widget.highlightToken ?? 'SS-04';
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.verified_rounded, color: AppColors.neonMint, size: 22),
+            const SizedBox(width: 8),
+            Text('WhatsApp Drop Proof Verified', style: AppTypography.titleMedium.copyWith(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              height: 180,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: const Color(0xFFF3F4F6),
+                image: const DecorationImage(
+                  image: AssetImage('assets/images/gate_drop_sample.jpg'),
+                  fit: BoxFit.cover,
+                ),
+              ),
+              child: Stack(
+                children: [
+                  Positioned(
+                    bottom: 8,
+                    left: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.8),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        'Token: #$token • Dropped: 07:34 AM',
+                        style: AppTypography.caption.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Driver marked delivered at your hostel gate. Guard verified parcel #$token.',
+              style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '⚡ Gate Drop Only: Please collect from security desk. Consuming within 30 minutes preserves woodfire freshness.',
+                style: AppTypography.caption.copyWith(color: const Color(0xFF1E40AF), fontWeight: FontWeight.w600, fontSize: 10),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: const Text('Got It'),
+          ),
+        ],
+      ),
+    );
+  }
 
   void _showPauseConfirmation(MealTicket ticket, int dayIndex) {
     HapticFeedback.lightImpact();
@@ -299,6 +399,19 @@ class _TicketCalendarScreenState extends ConsumerState<TicketCalendarScreen> {
                     ),
                   ],
                 ),
+              ),
+            ),
+          ),
+
+          // Live Heat Preservation Window Card (30-min cold-food protection)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: GateHeatPreservationCard(
+                bagToken: tickets.isNotEmpty ? tickets.first.bagToken : '#SS-04',
+                clusterName: dashboardState.selectedCluster.name,
+                gateLocationDetail: 'Security Desk • Shelf #2',
+                droppedAt: DateTime.now().subtract(const Duration(minutes: 8)),
               ),
             ),
           ),

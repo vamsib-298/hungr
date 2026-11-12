@@ -89,7 +89,14 @@ const ZONES = [
     vehicle: 'Honda Activa 6G (TS 04 EA 1234)',
     orders: 42,
     fuelSaved: 2.8,
-    route: 'Bypass Hub ➔ Sri Sai PG ➔ Kakatiya Girls ➔ Collectorate Quarters'
+    route: 'Bypass Hub ➔ Sri Sai PG ➔ Kakatiya Girls ➔ Collectorate Quarters',
+    coords: [17.2620, 80.1470],
+    color: '#3B82F6',
+    clusters: [
+      { name: 'Sri Sai PG Gate', lat: 17.2635, lng: 80.1465, meals: 18, token: '#SS-04' },
+      { name: 'Kakatiya Girls Hostel', lat: 17.2605, lng: 80.1485, meals: 14, token: '#KG-09' },
+      { name: 'Mamata Medical Campus', lat: 17.2650, lng: 80.1440, meals: 10, token: '#MM-02' }
+    ]
   },
   {
     id: 'south',
@@ -100,7 +107,14 @@ const ZONES = [
     vehicle: 'Hero Splendor+ (TS 04 EB 5678)',
     orders: 38,
     fuelSaved: 2.3,
-    route: 'Wyra Road Hub ➔ Green Valley ➔ Sri Chaitanya ➔ Vijaya Towers'
+    route: 'Wyra Road Hub ➔ Green Valley ➔ Sri Chaitanya ➔ Vijaya Towers',
+    coords: [17.2340, 80.1600],
+    color: '#10B981',
+    clusters: [
+      { name: 'Green Valley Enclave Gate', lat: 17.2325, lng: 80.1620, meals: 16, token: '#GV-11' },
+      { name: 'Sri Chaitanya Boys Gate', lat: 17.2360, lng: 80.1580, meals: 12, token: '#SC-05' },
+      { name: 'NSP Colony Watchman Desk', lat: 17.2310, lng: 80.1650, meals: 10, token: '#NS-07' }
+    ]
   },
   {
     id: 'east',
@@ -111,7 +125,14 @@ const ZONES = [
     vehicle: 'TVS Jupiter 125 (TS 04 EC 9012)',
     orders: 51,
     fuelSaved: 3.4,
-    route: 'East Hub ➔ Bus Stand Gate ➔ Mamata Quarters ➔ Krishna Residency'
+    route: 'East Hub ➔ Bus Stand Gate ➔ Mamata Quarters ➔ Krishna Residency',
+    coords: [17.2510, 80.1650],
+    color: '#F59E0B',
+    clusters: [
+      { name: 'RTC Bus Stand Entrance', lat: 17.2515, lng: 80.1635, meals: 22, token: '#BS-14' },
+      { name: 'Sri Krishna Residency', lat: 17.2490, lng: 80.1680, meals: 18, token: '#KR-03' },
+      { name: 'Railway Colony Gate 2', lat: 17.2530, lng: 80.1670, meals: 11, token: '#RC-08' }
+    ]
   },
   {
     id: 'west',
@@ -122,7 +143,14 @@ const ZONES = [
     vehicle: 'Bajaj Pulsar 125 (TS 04 ED 3456)',
     orders: 29,
     fuelSaved: 1.9,
-    route: 'West Hub ➔ Gayatri Towers ➔ Mayuri Centre ➔ Rotary Nagar'
+    route: 'West Hub ➔ Gayatri Towers ➔ Mayuri Centre ➔ Rotary Nagar',
+    coords: [17.2430, 80.1380],
+    color: '#EF4444',
+    clusters: [
+      { name: 'Clock Tower / Gandhi Chowk', lat: 17.2440, lng: 80.1370, meals: 13, token: '#CT-01' },
+      { name: 'Gayatri Towers Reception', lat: 17.2415, lng: 80.1395, meals: 9, token: '#GT-06' },
+      { name: 'Rotary Nagar Security Gate', lat: 17.2460, lng: 80.1350, meals: 7, token: '#RN-12' }
+    ]
   }
 ];
 
@@ -374,6 +402,7 @@ function saveShopChanges() {
   });
 
   saveShopsToStorage();
+  broadcastKitchenUpdate('UPDATE_SHOP_STATUS_AND_PRICES', shop);
   closeEditShopModal();
   alert(`Changes saved for ${shop.name}! Status: ${shop.status.toUpperCase()}`);
 }
@@ -417,6 +446,7 @@ function saveNewShop() {
 
   shops.push(newShop);
   saveShopsToStorage();
+  broadcastKitchenUpdate('ADD_NEW_SHOP', newShop);
   closeAddShopModal();
   alert(`Onboarded ${name} successfully!`);
 }
@@ -430,10 +460,229 @@ document.querySelectorAll('.tab-btn').forEach(button => {
     button.classList.add('active');
     const targetId = button.getAttribute('data-tab');
     document.getElementById(targetId).classList.add('active');
+
+    if (targetId === 'zones-tab' && khammamMap) {
+      setTimeout(() => khammamMap.invalidateSize(), 200);
+    }
   });
 });
 
-// 9. Live Clock
+// 9. Realtime Live Sync Engine (Web Admin ⇄ Mobile App)
+const opsBroadcastChannel = (typeof BroadcastChannel !== 'undefined') ? new BroadcastChannel('hungr_ops_channel') : null;
+
+function broadcastKitchenUpdate(action, data) {
+  const payload = {
+    action: action,
+    data: data,
+    timestamp: Date.now()
+  };
+  if (opsBroadcastChannel) {
+    try {
+      opsBroadcastChannel.postMessage(payload);
+    } catch (e) {
+      console.warn('BroadcastChannel error:', e);
+    }
+  }
+  try {
+    localStorage.setItem('hungr_kitchen_sync_event', JSON.stringify(payload));
+  } catch (e) {
+    console.warn('localStorage sync error:', e);
+  }
+}
+
+// 10. Khammam Interactive Leaflet & Vector Heatmap Engine
+let khammamMap = null;
+let mapMarkers = [];
+let mapPolylines = [];
+
+function initKhammamMap() {
+  const mapElement = document.getElementById('khammam-map');
+  if (!mapElement) return;
+
+  const khammamCenter = [17.2472, 80.1514];
+
+  if (typeof L !== 'undefined' && L.map) {
+    try {
+      khammamMap = L.map('khammam-map', {
+        center: khammamCenter,
+        zoom: 13,
+        zoomControl: true
+      });
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors • Hungr Morning Dispatch',
+        maxZoom: 18
+      }).addTo(khammamMap);
+
+      ZONES.forEach(zone => {
+        // Sector Coverage Area
+        L.circle(zone.coords, {
+          color: zone.color,
+          fillColor: zone.color,
+          fillOpacity: 0.12,
+          radius: 1200,
+          weight: 1.5,
+          dashArray: '4, 4'
+        }).addTo(khammamMap);
+
+        // Hub Node Marker
+        const hubHtml = `<div class="heat-pulse-node" style="background:${zone.color}; width:32px; height:32px;">${zone.orders}</div>`;
+        const hubIcon = L.divIcon({
+          html: hubHtml,
+          className: 'custom-hub-marker',
+          iconSize: [32, 32],
+          iconAnchor: [16, 16]
+        });
+
+        const hubMarker = L.marker(zone.coords, { icon: hubIcon }).addTo(khammamMap);
+        hubMarker.bindPopup(`
+          <div style="font-family:'Plus Jakarta Sans',sans-serif; min-width:180px;">
+            <strong style="color:${zone.color}; font-size:13px;">${zone.name}</strong><br>
+            <span style="font-size:11px; color:#4B5563;">🛵 Driver: <b>${zone.driver}</b></span><br>
+            <span style="font-size:11px; color:#16A34A;">⛽ Saved: <b>${zone.fuelSaved} Litres</b></span><br>
+            <span style="font-size:12px; font-weight:700; color:#111827;">📦 ${zone.orders} Pre-Batched Meals</span>
+          </div>
+        `);
+        mapMarkers.push({ sector: zone.id, marker: hubMarker, coords: zone.coords });
+
+        // Cluster stops & route polyline
+        const routeCoords = [zone.coords];
+        if (zone.clusters) {
+          zone.clusters.forEach(cluster => {
+            routeCoords.push([cluster.lat, cluster.lng]);
+            const clusterHtml = `<div style="background:white; border:2px solid ${zone.color}; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:800; color:${zone.color}; box-shadow:0 1px 4px rgba(0,0,0,0.25);">${cluster.meals}</div>`;
+            const clusterIcon = L.divIcon({
+              html: clusterHtml,
+              className: 'cluster-stop-marker',
+              iconSize: [22, 22],
+              iconAnchor: [11, 11]
+            });
+
+            const clusterMarker = L.marker([cluster.lat, cluster.lng], { icon: clusterIcon }).addTo(khammamMap);
+            clusterMarker.bindPopup(`
+              <div style="font-family:'Plus Jakarta Sans',sans-serif; min-width:160px;">
+                <span style="background:${zone.color}; color:white; font-size:10px; font-weight:700; padding:2px 6px; border-radius:4px;">${cluster.token}</span>
+                <h4 style="margin:4px 0 2px 0; font-size:12px; color:#111827;">${cluster.name}</h4>
+                <p style="margin:0; font-size:11px; color:#6B7280;">${cluster.meals} breakfast parcels • Dropped at Gate</p>
+              </div>
+            `);
+            mapMarkers.push({ sector: zone.id, marker: clusterMarker, coords: [cluster.lat, cluster.lng] });
+          });
+        }
+
+        // Polyline connecting stops
+        const poly = L.polyline(routeCoords, {
+          color: zone.color,
+          weight: 2.5,
+          opacity: 0.7,
+          dashArray: '6, 6'
+        }).addTo(khammamMap);
+        mapPolylines.push({ sector: zone.id, polyline: poly });
+      });
+
+      return;
+    } catch (e) {
+      console.warn('Leaflet initialization warning, falling back to vector SVG:', e);
+    }
+  }
+
+  // Fallback: Rich Vector Interactive SVG Radar Map if Leaflet is blocked / offline
+  renderVectorMapFallback(mapElement);
+}
+
+function renderVectorMapFallback(container) {
+  container.innerHTML = `
+    <div class="vector-map-overlay">
+      <svg viewBox="0 0 800 400" width="100%" height="100%" style="max-height: 420px;">
+        <defs>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#E5E7EB" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <rect width="800" height="400" fill="url(#grid)" />
+
+        <!-- Khammam Center Landmark -->
+        <circle cx="400" cy="200" r="14" fill="#E23744" opacity="0.15"/>
+        <circle cx="400" cy="200" r="6" fill="#E23744"/>
+        <text x="400" y="222" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="700" fill="#111827" text-anchor="middle">Khammam Central Hub</text>
+
+        <!-- North Sector (Bypass) -->
+        <g id="svg-sector-north" class="svg-sector-group" style="cursor:pointer;" onclick="filterMapSector('north')">
+          <circle cx="400" cy="75" r="55" fill="#3B82F6" opacity="0.12" stroke="#3B82F6" stroke-width="2" stroke-dasharray="4,4"/>
+          <line x1="400" y1="200" x2="400" y2="90" stroke="#3B82F6" stroke-width="2" stroke-dasharray="5,5"/>
+          <circle cx="400" cy="75" r="16" fill="#3B82F6"/>
+          <text x="400" y="79" fill="#FFFFFF" font-family="'JetBrains Mono'" font-size="10" font-weight="800" text-anchor="middle">42</text>
+          <text x="400" y="50" font-family="'Plus Jakarta Sans'" font-size="12" font-weight="800" fill="#1D4ED8" text-anchor="middle">NORTH (Bypass)</text>
+          <text x="400" y="105" font-family="sans-serif" font-size="10" fill="#4B5563" text-anchor="middle">Ramesh Goud • 3 Clusters</text>
+        </g>
+
+        <!-- South Sector (Wyra Road) -->
+        <g id="svg-sector-south" class="svg-sector-group" style="cursor:pointer;" onclick="filterMapSector('south')">
+          <circle cx="400" cy="320" r="55" fill="#10B981" opacity="0.12" stroke="#10B981" stroke-width="2" stroke-dasharray="4,4"/>
+          <line x1="400" y1="200" x2="400" y2="305" stroke="#10B981" stroke-width="2" stroke-dasharray="5,5"/>
+          <circle cx="400" cy="320" r="16" fill="#10B981"/>
+          <text x="400" y="324" fill="#FFFFFF" font-family="'JetBrains Mono'" font-size="10" font-weight="800" text-anchor="middle">38</text>
+          <text x="400" y="352" font-family="'Plus Jakarta Sans'" font-size="12" font-weight="800" fill="#047857" text-anchor="middle">SOUTH (Wyra Rd)</text>
+          <text x="400" y="295" font-family="sans-serif" font-size="10" fill="#4B5563" text-anchor="middle">Suresh Kumar • 3 Clusters</text>
+        </g>
+
+        <!-- East Sector (Bus Stand) -->
+        <g id="svg-sector-east" class="svg-sector-group" style="cursor:pointer;" onclick="filterMapSector('east')">
+          <circle cx="620" cy="200" r="55" fill="#F59E0B" opacity="0.12" stroke="#F59E0B" stroke-width="2" stroke-dasharray="4,4"/>
+          <line x1="400" y1="200" x2="605" y2="200" stroke="#F59E0B" stroke-width="2" stroke-dasharray="5,5"/>
+          <circle cx="620" cy="200" r="16" fill="#F59E0B"/>
+          <text x="620" y="204" fill="#FFFFFF" font-family="'JetBrains Mono'" font-size="10" font-weight="800" text-anchor="middle">51</text>
+          <text x="620" y="170" font-family="'Plus Jakarta Sans'" font-size="12" font-weight="800" fill="#B45309" text-anchor="middle">EAST (Bus Stand)</text>
+          <text x="620" y="230" font-family="sans-serif" font-size="10" fill="#4B5563" text-anchor="middle">Naresh Babu • 3 Clusters</text>
+        </g>
+
+        <!-- West Sector (Gandhi Chowk) -->
+        <g id="svg-sector-west" class="svg-sector-group" style="cursor:pointer;" onclick="filterMapSector('west')">
+          <circle cx="180" cy="200" r="55" fill="#EF4444" opacity="0.12" stroke="#EF4444" stroke-width="2" stroke-dasharray="4,4"/>
+          <line x1="400" y1="200" x2="195" y2="200" stroke="#EF4444" stroke-width="2" stroke-dasharray="5,5"/>
+          <circle cx="180" cy="200" r="16" fill="#EF4444"/>
+          <text x="180" y="204" fill="#FFFFFF" font-family="'JetBrains Mono'" font-size="10" font-weight="800" text-anchor="middle">29</text>
+          <text x="180" y="170" font-family="'Plus Jakarta Sans'" font-size="12" font-weight="800" fill="#B91C1C" text-anchor="middle">WEST (Gandhi Chowk)</text>
+          <text x="180" y="230" font-family="sans-serif" font-size="10" fill="#4B5563" text-anchor="middle">Mahesh Yadav • 3 Clusters</text>
+        </g>
+      </svg>
+    </div>
+  `;
+}
+
+function filterMapSector(sector, btnElement) {
+  document.querySelectorAll('.sector-btn').forEach(b => b.classList.remove('active'));
+  if (btnElement) {
+    btnElement.classList.add('active');
+  } else {
+    const matchingBtn = Array.from(document.querySelectorAll('.sector-btn')).find(b => b.getAttribute('onclick')?.includes(sector));
+    if (matchingBtn) matchingBtn.classList.add('active');
+  }
+
+  const cards = document.querySelectorAll('.zone-card');
+  cards.forEach(card => {
+    const title = card.querySelector('.zone-title')?.innerText.toLowerCase() || '';
+    if (sector === 'all' || title.includes(sector)) {
+      card.style.display = 'block';
+      card.style.border = sector === 'all' ? '1px solid var(--border-color)' : '2px solid var(--primary-red)';
+    } else {
+      card.style.display = 'none';
+    }
+  });
+
+  if (khammamMap) {
+    if (sector === 'all') {
+      khammamMap.setView([17.2472, 80.1514], 13);
+    } else {
+      const targetZone = ZONES.find(z => z.id === sector);
+      if (targetZone) {
+        khammamMap.flyTo(targetZone.coords, 14.5, { animate: true, duration: 1.0 });
+      }
+    }
+  }
+}
+
+// 11. Live Clock
 function updateClock() {
   const now = new Date();
   const options = { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true };
@@ -448,5 +697,6 @@ window.addEventListener('DOMContentLoaded', () => {
   renderDispatchFeed();
   updateKPIs();
   updateClock();
+  initKhammamMap();
   setInterval(updateClock, 1000);
 });

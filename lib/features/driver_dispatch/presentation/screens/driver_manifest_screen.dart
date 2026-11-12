@@ -10,6 +10,7 @@ import '../../../../core/widgets/dark_shimmer.dart';
 import '../../domain/khammam_zone_model.dart';
 import '../../domain/manifest_stop_model.dart';
 import '../viewmodels/driver_manifest_viewmodel.dart';
+import '../../../../core/utils/whatsapp_link_helper.dart';
 
 class DriverManifestScreen extends ConsumerStatefulWidget {
   const DriverManifestScreen({super.key});
@@ -287,6 +288,35 @@ class _DriverManifestScreenState extends ConsumerState<DriverManifestScreen> {
               Text(
                 'Phone number copied to clipboard! You can dial directly.',
                 style: AppTypography.caption.copyWith(color: const Color(0xFF16A34A), fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    final msg = WhatsAppLinkHelper.formatGateDropMessage(
+                      customerName: customer.customerName,
+                      bagToken: '#SS-04',
+                      clusterName: 'Hostel Gate Security Desk',
+                      ticketId: customer.ticketId,
+                    );
+                    WhatsAppLinkHelper.copyAlertToClipboard(msg);
+                    Navigator.of(context).pop();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        backgroundColor: Color(0xFF15803D),
+                        behavior: SnackBarBehavior.floating,
+                        content: Text('WhatsApp Gate Drop message copied! Paste directly into customer chat.'),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.mark_chat_unread_rounded, size: 16, color: Color(0xFF16A34A)),
+                  label: const Text('Copy 1-Tap WhatsApp Alert', style: TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.bold)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF86EFAC)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
               ),
             ],
           ),

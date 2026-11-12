@@ -21,6 +21,8 @@ import '../widgets/sticky_cutoff_flip_clock.dart';
 import '../widgets/tiffin_item_card.dart';
 import '../widgets/tiffin_shop_card.dart';
 import '../widgets/live_drop_radar_card.dart';
+import '../widgets/gate_heat_preservation_card.dart';
+import '../../data/shop_sync_service.dart';
 import 'shop_details_screen.dart';
 import '../../../subscription/presentation/widgets/viral_referral_banner.dart';
 
@@ -59,6 +61,41 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
     final cartState = ref.watch(cartProvider);
     final cartNotifier = ref.read(cartViewModelProvider.notifier);
     final shops = ref.watch(tiffinShopsProvider);
+
+    // Realtime Operations Live Sync Listener
+    ref.listen(liveOpsEventStreamProvider, (previous, next) {
+      next.whenData((event) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.sync_rounded, color: Colors.white, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    event.description,
+                    style: AppTypography.bodySmall.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: event.action == OpsSyncAction.statusChange
+                ? (event.description.contains('Open')
+                    ? const Color(0xFF16A34A)
+                    : const Color(0xFFD97706))
+                : AppColors.zomatoRed,
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      });
+    });
 
     final bool isSingleDayMode = cartState.orderMode == OrderMode.singleDay;
 
@@ -531,9 +568,43 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
                               'Top Tiffin Centers in Khammam',
                               style: AppTypography.displayMedium.copyWith(fontSize: 18, color: AppColors.textPrimary),
                             ),
-                            Text(
-                              '${shops.length} Kitchens',
-                              style: AppTypography.caption.copyWith(color: AppColors.textSubtle),
+                            InkWell(
+                              onTap: () {
+                                HapticFeedback.lightImpact();
+                                ref.read(shopSyncServiceProvider).triggerSimulatedOpsSync();
+                              },
+                              borderRadius: BorderRadius.circular(12),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFDCFCE7),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0xFF86EFAC), width: 1),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 6,
+                                      height: 6,
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFF16A34A),
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 5),
+                                    Text(
+                                      'LIVE SYNC',
+                                      style: AppTypography.caption.copyWith(
+                                        color: const Color(0xFF16A34A),
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 10,
+                                        letterSpacing: 0.5,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ],
                         ),

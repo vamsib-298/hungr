@@ -7,6 +7,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -109,10 +111,31 @@
     <section id="zones-tab" class="tab-panel">
       <div class="section-header">
         <div>
-          <h2 class="section-title">Khammam 4-Zone Route Consolidation</h2>
+          <h2 class="section-title">Khammam 4-Zone Route Consolidation & Live Heatmap</h2>
           <p class="section-subtitle">Real-time order density tracking to eliminate empty delivery miles and allocate drivers.</p>
         </div>
         <div class="zone-filter-pill">Khammam Metropolitan Area</div>
+      </div>
+
+      <!-- Live Interactive Map Section -->
+      <div class="map-toolbar">
+        <div class="sector-btn-group">
+          <button class="sector-btn active" onclick="filterMapSector('all', this)">All 4 Sectors (160 Meals)</button>
+          <button class="sector-btn" onclick="filterMapSector('north', this)">North (Bypass - 42)</button>
+          <button class="sector-btn" onclick="filterMapSector('south', this)">South (Wyra - 38)</button>
+          <button class="sector-btn" onclick="filterMapSector('east', this)">East (Bus Stand - 51)</button>
+          <button class="sector-btn" onclick="filterMapSector('west', this)">West (Gandhi Chowk - 29)</button>
+        </div>
+        <div class="heat-legend">
+          <div class="legend-item"><span class="legend-dot" style="background:#3B82F6"></span> North Zone</div>
+          <div class="legend-item"><span class="legend-dot" style="background:#10B981"></span> South Zone</div>
+          <div class="legend-item"><span class="legend-dot" style="background:#F59E0B"></span> East Zone</div>
+          <div class="legend-item"><span class="legend-dot" style="background:#EF4444"></span> West Zone</div>
+        </div>
+      </div>
+
+      <div id="khammam-map" class="khammam-map-container">
+        <!-- Interactive Leaflet Map or Vector Fallback rendered by app.js -->
       </div>
 
       <div class="zones-grid" id="zones-container">

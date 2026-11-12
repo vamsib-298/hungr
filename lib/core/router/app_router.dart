@@ -113,6 +113,28 @@ class AppRouter {
         ),
       ),
       GoRoute(
+        path: RouteNames.deepLinkTicket,
+        pageBuilder: (context, state) {
+          final ticketId = state.pathParameters['id'] ?? 't_001';
+          return SmoothTransitions.stackSlide(
+            context: context,
+            state: state,
+            child: TicketCalendarScreen(highlightTicketId: ticketId),
+          );
+        },
+      ),
+      GoRoute(
+        path: RouteNames.deepLinkDrop,
+        pageBuilder: (context, state) {
+          final token = state.pathParameters['token'] ?? 'SS-04';
+          return SmoothTransitions.stackSlide(
+            context: context,
+            state: state,
+            child: TicketCalendarScreen(highlightToken: token),
+          );
+        },
+      ),
+      GoRoute(
         path: RouteNames.driverManifest,
         pageBuilder: (context, state) => SmoothTransitions.stackSlide(
           context: context,

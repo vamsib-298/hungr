@@ -23,5 +23,9 @@ class RouteNames {
   static const String referral = '/profile/referral';
   static const String subscriptionHistory = '/subscription/history';
   static const String legalPolicy = '/legal-policy';
+
+  // Deep Links (WhatsApp 1-Tap Drop Proof)
+  static const String deepLinkTicket = '/ticket/:id';
+  static const String deepLinkDrop = '/drop/:token';
 }
 
