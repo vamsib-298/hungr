@@ -296,9 +296,9 @@ class _DriverManifestScreenState extends ConsumerState<DriverManifestScreen> {
                   onPressed: () {
                     final msg = WhatsAppLinkHelper.formatGateDropMessage(
                       customerName: customer.customerName,
-                      bagToken: '#SS-04',
+                      bagToken: customer.bagToken ?? '#SS-04',
                       clusterName: 'Hostel Gate Security Desk',
-                      ticketId: customer.ticketId,
+                      ticketId: customer.ticketId ?? 'tkt_${customer.userId}',
                     );
                     WhatsAppLinkHelper.copyAlertToClipboard(msg);
                     Navigator.of(context).pop();

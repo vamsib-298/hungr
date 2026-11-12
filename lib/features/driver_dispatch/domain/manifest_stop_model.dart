@@ -7,6 +7,8 @@ class CustomerDropDetail {
   final String itemSummary;
   final int units;
   final bool isDelivered;
+  final String? ticketId;
+  final String? bagToken;
 
   const CustomerDropDetail({
     required this.userId,
@@ -16,9 +18,15 @@ class CustomerDropDetail {
     required this.itemSummary,
     this.units = 1,
     this.isDelivered = false,
+    this.ticketId,
+    this.bagToken,
   });
 
-  CustomerDropDetail copyWith({bool? isDelivered}) {
+  CustomerDropDetail copyWith({
+    bool? isDelivered,
+    String? ticketId,
+    String? bagToken,
+  }) {
     return CustomerDropDetail(
       userId: userId,
       customerName: customerName,
@@ -27,6 +35,8 @@ class CustomerDropDetail {
       itemSummary: itemSummary,
       units: units,
       isDelivered: isDelivered ?? this.isDelivered,
+      ticketId: ticketId ?? this.ticketId,
+      bagToken: bagToken ?? this.bagToken,
     );
   }
 }
