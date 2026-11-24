@@ -216,7 +216,7 @@ class FirebaseService {
     try {
       return firestore
           .collection('offers')
-          .where('isActive', '==', true)
+          .where('isActive', isEqualTo: true)
           .snapshots()
           .map((snapshot) => snapshot.docs.map((d) => {'id': d.id, ...d.data()}).toList())
           .handleError((_) => <Map<String, dynamic>>[]);
@@ -378,7 +378,7 @@ class FirebaseService {
     try {
       return firestore
           .collection('orders')
-          .where('userId', '==', userId)
+          .where('userId', isEqualTo: userId)
           .orderBy('createdAt', descending: true)
           .snapshots()
           .map((snap) => snap.docs.map((d) => d.data()).toList())

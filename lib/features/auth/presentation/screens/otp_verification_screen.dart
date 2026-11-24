@@ -17,7 +17,7 @@ class OtpVerificationScreen extends ConsumerStatefulWidget {
   const OtpVerificationScreen({
     super.key,
     this.phoneNumber = '+91 98765 43210',
-    this.userName = 'Vamsi Krishna',
+    this.userName = 'Hungr Foodie',
   });
 
   @override

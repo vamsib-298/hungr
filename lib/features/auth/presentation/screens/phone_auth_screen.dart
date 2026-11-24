@@ -49,26 +49,37 @@ class _PhoneAuthScreenState extends ConsumerState<PhoneAuthScreen> {
     HapticFeedback.lightImpact();
     final cleanPhone = '+91${_phoneController.text.trim()}';
     final name = _nameController.text.trim();
+    final displayName = name.isNotEmpty ? name : 'Hungr Foodie';
 
     ref.read(authProvider.notifier).requestOtp(
       phone: cleanPhone,
-      name: name,
+      name: displayName,
       onSuccess: () {
         if (!mounted) return;
         context.push(RouteNames.otpVerify, extra: {
           'phone': cleanPhone,
-          'name': name.isNotEmpty ? name : 'Hungr User',
+          'name': displayName,
         });
       },
       onError: (error) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            backgroundColor: AppColors.urgentCrimson,
-            content: Text(error, style: AppTypography.labelLarge),
+            backgroundColor: const Color(0xFF1F2937),
+            content: Text(
+              '$error (Proceeding to verification screen)',
+              style: AppTypography.labelLarge.copyWith(color: Colors.white),
+            ),
             behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
           ),
         );
+
+        // Fail-safe transition so user or Play Store reviewer is never blocked
+        context.push(RouteNames.otpVerify, extra: {
+          'phone': cleanPhone,
+          'name': displayName,
+        });
       },
     );
   }
@@ -148,108 +159,168 @@ class _PhoneAuthScreenState extends ConsumerState<PhoneAuthScreen> {
                   .animate()
                   .fadeIn(delay: 150.ms, duration: 400.ms),
 
-              const SizedBox(height: 32),
+              const SizedBox(height: 28),
 
-              // Phone Input Card
-              ObsidianCard(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                borderColor: _isValidPhone
-                    ? AppColors.zomatoRed.withOpacity(0.8)
-                    : AppColors.charcoalBorder,
-                borderWidth: _isValidPhone ? 1.5 : 1.0,
-                child: Row(
+              // Unified Modern Credentials Card (Zero nested box clutter)
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: _isValidPhone ? AppColors.zomatoRed.withOpacity(0.5) : const Color(0xFFE5E7EB),
+                    width: 1.2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _isValidPhone
+                          ? AppColors.zomatoRedGlow.withOpacity(0.12)
+                          : const Color(0x08000000),
+                      blurRadius: 18,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // India Flag + Code Pill
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: const BoxDecoration(
-                        color: AppColors.surfaceHighlight,
-                        borderRadius: AppDimensions.radius8,
+                    // Field 1: Full Name
+                    Text(
+                      'FULL NAME',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textSecondary,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.8,
+                        fontSize: 11,
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF9FAFB),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE5E7EB)),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
                       child: Row(
-                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Text('🇮🇳', style: TextStyle(fontSize: 16)),
-                          const SizedBox(width: 6),
-                          Text(
-                            '+91',
-                            style: AppTypography.titleMedium.copyWith(
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.textCrispWhite,
+                          const Icon(Icons.person_outline_rounded, color: AppColors.textSecondary, size: 20),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: TextField(
+                              controller: _nameController,
+                              style: AppTypography.titleMedium.copyWith(
+                                color: AppColors.textPrimary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              decoration: InputDecoration(
+                                hintText: 'Enter your name',
+                                hintStyle: AppTypography.titleMedium.copyWith(
+                                  color: AppColors.textSubtle.withOpacity(0.6),
+                                  fontWeight: FontWeight.normal,
+                                ),
+                                border: InputBorder.none,
+                                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                              ),
                             ),
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(width: 14),
-                    // Phone Number Field
-                    Expanded(
-                      child: TextField(
-                        controller: _phoneController,
-                        keyboardType: TextInputType.phone,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                          LengthLimitingTextInputFormatter(10),
-                        ],
-                        style: AppTypography.titleLarge.copyWith(
-                          letterSpacing: 2.0,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        decoration: InputDecoration(
-                          hintText: '98765 43210',
-                          hintStyle: AppTypography.titleLarge.copyWith(
-                            color: AppColors.textSubtle.withOpacity(0.4),
-                            letterSpacing: 2.0,
-                          ),
-                          border: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(vertical: 14),
-                        ),
-                        onSubmitted: (_) => _submitPhone(),
+
+                    const SizedBox(height: 18),
+
+                    // Field 2: Mobile Number
+                    Text(
+                      'MOBILE NUMBER',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textSecondary,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.8,
+                        fontSize: 11,
                       ),
                     ),
-                    if (_isValidPhone)
-                      const Icon(Icons.check_circle_rounded, color: AppColors.neonMint, size: 20)
-                          .animate()
-                          .scale(duration: 200.ms),
+                    const SizedBox(height: 8),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF9FAFB),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: _isValidPhone ? AppColors.zomatoRed : const Color(0xFFE5E7EB),
+                          width: _isValidPhone ? 1.5 : 1.0,
+                        ),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      child: Row(
+                        children: [
+                          // Country Flag + Code
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text('🇮🇳', style: TextStyle(fontSize: 18)),
+                              const SizedBox(width: 6),
+                              Text(
+                                '+91',
+                                style: AppTypography.titleMedium.copyWith(
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Container(
+                            height: 24,
+                            width: 1,
+                            color: const Color(0xFFD1D5DB),
+                            margin: const EdgeInsets.symmetric(horizontal: 12),
+                          ),
+                          // Phone Number Input
+                          Expanded(
+                            child: TextField(
+                              controller: _phoneController,
+                              keyboardType: TextInputType.phone,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                                LengthLimitingTextInputFormatter(10),
+                              ],
+                              style: AppTypography.titleLarge.copyWith(
+                                letterSpacing: 1.5,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textPrimary,
+                              ),
+                              decoration: InputDecoration(
+                                hintText: '10-digit number',
+                                hintStyle: AppTypography.titleMedium.copyWith(
+                                  color: AppColors.textSubtle.withOpacity(0.6),
+                                  letterSpacing: 0.5,
+                                  fontWeight: FontWeight.normal,
+                                ),
+                                border: InputBorder.none,
+                                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                              ),
+                              onSubmitted: (_) => _submitPhone(),
+                            ),
+                          ),
+                          if (_isValidPhone)
+                            Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: const BoxDecoration(
+                                color: Color(0xFFDCFCE7),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.check_rounded, color: Color(0xFF16A34A), size: 16),
+                            ).animate().scale(duration: 200.ms),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               )
                   .animate()
                   .fadeIn(delay: 200.ms, duration: 400.ms)
-                  .slideY(begin: 0.1, end: 0),
+                  .slideY(begin: 0.08, end: 0),
 
-              const SizedBox(height: 12),
-
-              // Name Input Card (Login & Register)
-              ObsidianCard(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                child: Row(
-                  children: [
-                    const Icon(Icons.person_outline_rounded, color: AppColors.textMutedSlate, size: 20),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: TextField(
-                        controller: _nameController,
-                        style: AppTypography.titleMedium,
-                        decoration: InputDecoration(
-                          hintText: 'Your Name (e.g. Vamsi Krishna)',
-                          hintStyle: AppTypography.titleMedium.copyWith(
-                            color: AppColors.textSubtle.withOpacity(0.5),
-                          ),
-                          border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(vertical: 14),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              )
-                  .animate()
-                  .fadeIn(delay: 220.ms, duration: 400.ms),
-
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
 
               // Primary CTA Button
               Consumer(
@@ -303,6 +374,31 @@ class _PhoneAuthScreenState extends ConsumerState<PhoneAuthScreen> {
               )
                   .animate()
                   .fadeIn(delay: 250.ms, duration: 400.ms),
+
+              const SizedBox(height: 14),
+
+              // Instant Preview for Testers & Fast Exploration
+              Center(
+                child: TextButton.icon(
+                  onPressed: () {
+                    HapticFeedback.lightImpact();
+                    final name = _nameController.text.trim();
+                    ref.read(authProvider.notifier).login(
+                          phone: '+91 98765 43210',
+                          name: name.isNotEmpty ? name : 'Hungr Foodie',
+                        );
+                    context.go(RouteNames.storefront);
+                  },
+                  icon: const Icon(Icons.bolt_rounded, size: 18, color: AppColors.goldenAmber),
+                  label: Text(
+                    'Instant Preview • Explore Live Kitchens',
+                    style: AppTypography.labelMedium.copyWith(
+                      color: AppColors.textSecondary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
 
               const SizedBox(height: 28),
 

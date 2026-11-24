@@ -117,8 +117,8 @@ class LocalStorageService {
     await _ensureInitialized();
     return {
       'phone': (_memoryCache[_keyUserPhone] as String?) ?? '+91 98765 43210',
-      'name': (_memoryCache[_keyUserName] as String?) ?? 'Vamsi Krishna',
-      'clusterName': (_memoryCache[_keyClusterName] as String?) ?? 'Sri Sai Boys Hostel Gate',
+      'name': (_memoryCache[_keyUserName] as String?) ?? 'Hungr Foodie',
+      'clusterName': (_memoryCache[_keyClusterName] as String?) ?? 'Hostel Security Gate',
     };
   }
 

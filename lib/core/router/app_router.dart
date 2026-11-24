@@ -137,7 +137,7 @@ class AppRouter {
         path: RouteNames.otpVerify,
         pageBuilder: (context, state) {
           String phone = '+91 98765 43210';
-          String name = 'Vamsi Krishna';
+          String name = 'Hungr Foodie';
           if (state.extra is Map) {
             final map = state.extra as Map;
             phone = (map['phone'] as String?) ?? phone;

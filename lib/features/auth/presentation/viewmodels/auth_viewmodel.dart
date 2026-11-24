@@ -52,9 +52,9 @@ class AuthViewModel extends StateNotifier<AuthState> {
           const AuthState(
             isAuthenticated: false,
             isLoading: false,
-            userName: 'Vamsi Krishna',
+            userName: 'Hungr Foodie',
             phoneNumber: '+91 98765 43210',
-            dropGate: 'Sri Sai Boys Hostel Gate',
+            dropGate: 'Hostel Security Gate',
           ),
         ) {
     loadSavedSession();
