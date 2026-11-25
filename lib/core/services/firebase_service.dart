@@ -1,8 +1,9 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import '../../features/storefront/domain/tiffin_shop_model.dart';
 
 /// Production Firebase Service powering Authentication, Real-time Firestore sync,
@@ -119,12 +120,16 @@ class FirebaseService {
     return userCredential;
   }
 
-  /// Delete user account & Firestore profile (Google Play / DPDP compliance)
+  /// Delete user account & purge Firestore profile, carts, and tokens
   Future<void> deleteUserAccount() async {
     try {
       final user = currentUser;
       if (user != null) {
-        await firestore.collection('users').doc(user.uid).delete();
+        try {
+          await FirebaseFunctions.instance.httpsCallable('deleteMyAccountData').call();
+        } catch (_) {
+          await firestore.collection('users').doc(user.uid).delete();
+        }
         await user.delete();
       }
     } catch (e) {
@@ -243,21 +248,21 @@ class FirebaseService {
   // 4. FCM PUSH NOTIFICATIONS & RETENTION
   // ==========================================
 
-  /// Sync device FCM token to user document and global fcm_tokens collection
+  /// Sync device FCM token to user document and fcm_tokens collection (authenticated only)
   Future<void> syncFcmToken(String token) async {
     try {
       final user = currentUser;
-      if (user != null) {
-        await firestore.collection('users').doc(user.uid).set({
-          'fcmToken': token,
-          'fcmUpdatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
+      if (user == null) return;
+
+      await firestore.collection('users').doc(user.uid).set({
+        'fcmToken': token,
+        'fcmUpdatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
       await firestore.collection('fcm_tokens').doc(token).set({
         'token': token,
-        'userId': user?.uid,
-        'phoneNumber': user?.phoneNumber,
+        'userId': user.uid,
+        'phoneNumber': user.phoneNumber,
         'updatedAt': FieldValue.serverTimestamp(),
         'platform': 'android',
       }, SetOptions(merge: true));
@@ -307,149 +312,75 @@ class FirebaseService {
   }
 
   // ==========================================
-  // 5. LIVE ORDERS, PASSES & MEAL TICKETS LEDGER
+  // 5. SERVER-VERIFIED PAYMENTS, ORDERS & TICKETS
   // ==========================================
 
-  /// Records live order, pass (if subscription), and meal tickets to Cloud Firestore
-  Future<String> recordOrder({
-    required String userId,
-    required String phoneNumber,
-    required String customerName,
-    required String orderMode, // 'singleDay' or 'subscriptionPass'
-    String? tier,
+  /// Calls Cloud Function `createOrderIntent` to compute server totals & create Razorpay order
+  Future<Map<String, dynamic>> createOrderIntent({
+    required String orderMode,
     String? tierKey,
-    int? days,
     String? kitchenId,
-    String? kitchenName,
     required Map<String, int> itemQuantities,
-    required List<Map<String, dynamic>> itemDetails,
-    required int totalAmount,
-    int discountAmount = 0,
     String? appliedCoupon,
     required String clusterId,
     required String clusterName,
-    required String bagToken,
-    required String deliveryDate,
-    required DateTime startDate,
-    String deliverySlot = '07:30 AM – 08:00 AM',
-    String paymentMethod = 'Google Pay',
-    String deliveryInstructions = '',
-    String comboSelection = 'A',
-    int companionMeals = 0,
-    List<String> specialtyNames = const [],
+    required String deliverySlot,
+    required String deliveryInstructions,
+    required String paymentMethod,
+    required String customerName,
+    required String phoneNumber,
+    bool autoRotatePassMenu = true,
   }) async {
-    try {
-      final effectiveUid = currentUser?.uid ?? userId;
-      final batch = firestore.batch();
-      final orderRef = firestore.collection('orders').doc();
-
-      final orderData = {
-        'orderId': orderRef.id,
-        'userId': effectiveUid,
-        'phoneNumber': phoneNumber,
-        'customerName': customerName,
-        'orderMode': orderMode,
-        'tier': tier,
-        'tierKey': tierKey,
-        'days': days ?? 1,
-        'kitchenId': kitchenId,
-        'kitchenName': kitchenName ?? 'Hungr Partner Kitchen',
-        'items': itemQuantities,
-        'itemDetails': itemDetails,
-        'totalAmount': totalAmount,
-        'discountAmount': discountAmount,
-        'appliedCoupon': appliedCoupon,
-        'clusterId': clusterId,
-        'clusterName': clusterName,
-        'bagToken': bagToken,
-        'deliveryDate': deliveryDate,
-        'deliverySlot': deliverySlot,
-        'paymentMethod': paymentMethod,
-        'deliveryInstructions': deliveryInstructions,
-        'comboSelection': comboSelection,
-        'companionMeals': companionMeals,
-        'status': 'CONFIRMED',
-        'createdAt': FieldValue.serverTimestamp(),
-        'createdAtMs': DateTime.now().millisecondsSinceEpoch,
-      };
-      batch.set(orderRef, orderData);
-
-      String? passId;
-      if (orderMode == 'subscriptionPass' && days != null && days > 0) {
-        final passRef = firestore.collection('passes').doc();
-        passId = passRef.id;
-        final hardExpiry = startDate.add(Duration(days: days + 5));
-        batch.set(passRef, {
-          'passId': passId,
-          'orderId': orderRef.id,
-          'userId': effectiveUid,
-          'phoneNumber': phoneNumber,
-          'tier': tier,
-          'tierKey': tierKey ?? 'routine7Day',
-          'totalDays': days,
-          'remainingDays': days,
-          'clusterId': clusterId,
-          'clusterName': clusterName,
-          'bagToken': bagToken,
-          'comboSelection': comboSelection,
-          'status': 'ACTIVE',
-          'startDate': deliveryDate,
-          'hardExpiryDate': hardExpiry.toIso8601String(),
-          'createdAt': FieldValue.serverTimestamp(),
-          'createdAtMs': DateTime.now().millisecondsSinceEpoch,
-        });
-      }
-
-      // Create 1 ticket for single-day order or `days` tickets for pass
-      final int ticketCount = (orderMode == 'subscriptionPass' && days != null && days > 0) ? days : 1;
-      for (int i = 0; i < ticketCount; i++) {
-        final ticketRef = firestore.collection('meal_tickets').doc();
-        final ticketDate = startDate.add(Duration(days: i));
-        final ticketCombo = i == 0 ? comboSelection : (i % 2 == 0 ? comboSelection : (comboSelection == 'A' ? 'B' : 'A'));
-        final summaryName = orderMode == 'singleDay'
-            ? (itemDetails.isNotEmpty
-                ? itemDetails.map((e) => '${e['qty']}x ${e['name']}').join(', ')
-                : 'Morning Tiffin')
-            : (specialtyNames.isNotEmpty
-                ? specialtyNames[i % specialtyNames.length]
-                : (ticketCombo == 'A' ? 'Hot Set Dosa Combo' : 'Steamed Idli + Vada Combo'));
-
-        batch.set(ticketRef, {
-          'ticketId': ticketRef.id,
-          'orderId': orderRef.id,
-          'passId': passId ?? 'single_${orderRef.id}',
-          'userId': effectiveUid,
-          'phoneNumber': phoneNumber,
-          'clusterId': clusterId,
-          'clusterName': clusterName,
-          'bagToken': bagToken,
-          'deliveryDateIso': ticketDate.toIso8601String(),
-          'deliveryDate': deliveryDate,
-          'comboSelection': ticketCombo,
-          'addOns': itemQuantities.keys.toList(),
-          'specialtyName': summaryName,
-          'companionMeals': i == 0 ? companionMeals : 0,
-          'slot': deliverySlot.contains('08:00') ? 'MORNING_0800' : 'MORNING_0730',
-          'status': 'SCHEDULED',
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-      }
-
-      await batch.commit();
-      debugPrint('🎉 [Order Recorded] Live order ${orderRef.id} ($ticketCount ticket(s)) committed to Firestore');
-      return orderRef.id;
-    } catch (e) {
-      debugPrint('⚠️ [Record order error]: $e');
-      return 'local_${DateTime.now().millisecondsSinceEpoch}';
-    }
+    final callable = FirebaseFunctions.instance.httpsCallable('createOrderIntent');
+    final result = await callable.call({
+      'orderMode': orderMode,
+      'tierKey': tierKey,
+      'kitchenId': kitchenId,
+      'itemQuantities': itemQuantities,
+      'appliedCoupon': appliedCoupon,
+      'clusterId': clusterId,
+      'clusterName': clusterName,
+      'deliverySlot': deliverySlot,
+      'deliveryInstructions': deliveryInstructions,
+      'paymentMethod': paymentMethod,
+      'customerName': customerName,
+      'phoneNumber': phoneNumber,
+      'autoRotatePassMenu': autoRotatePassMenu,
+    });
+    return Map<String, dynamic>.from(result.data as Map);
   }
 
-  /// Real-time stream of user orders (sorted in Dart to avoid composite index dependency)
+  /// Calls Cloud Function `verifyAndCreateOrder` after Razorpay payment success
+  Future<Map<String, dynamic>> verifyAndCreateOrder({
+    required String intentId,
+    required String razorpayOrderId,
+    required String razorpayPaymentId,
+    required String razorpaySignature,
+  }) async {
+    final callable = FirebaseFunctions.instance.httpsCallable('verifyAndCreateOrder');
+    final result = await callable.call({
+      'intentId': intentId,
+      'razorpayOrderId': razorpayOrderId,
+      'razorpayPaymentId': razorpayPaymentId,
+      'razorpaySignature': razorpaySignature,
+    });
+    return Map<String, dynamic>.from(result.data as Map);
+  }
+
+  /// Calls Cloud Function `skipMealTicket` enforcing 21:00 IST cutoff & pass ceiling
+  Future<Map<String, dynamic>> callSkipMealTicket(String ticketId) async {
+    final callable = FirebaseFunctions.instance.httpsCallable('skipMealTicket');
+    final result = await callable.call({'ticketId': ticketId});
+    return Map<String, dynamic>.from(result.data as Map);
+  }
+
+  /// Real-time stream of user orders (bounded to latest 30 for 100K DAU scale)
   Stream<List<Map<String, dynamic>>> streamUserOrders(String uid) {
     try {
       return firestore
           .collection('orders')
           .where('userId', isEqualTo: uid)
+          .limit(30)
           .snapshots()
           .map((snap) {
             final list = snap.docs.map((d) => d.data()).toList();
@@ -469,12 +400,13 @@ class FirebaseService {
     }
   }
 
-  /// Real-time stream of user meal tickets
+  /// Real-time stream of user meal tickets (bounded to 30)
   Stream<List<Map<String, dynamic>>> streamUserTickets(String uid) {
     try {
       return firestore
           .collection('meal_tickets')
           .where('userId', isEqualTo: uid)
+          .limit(30)
           .snapshots()
           .map((snap) {
             final list = snap.docs.map((d) => d.data()).toList();
@@ -494,12 +426,13 @@ class FirebaseService {
     }
   }
 
-  /// Real-time stream of user passes
+  /// Real-time stream of user passes (bounded to 15)
   Stream<List<Map<String, dynamic>>> streamUserPasses(String uid) {
     try {
       return firestore
           .collection('passes')
           .where('userId', isEqualTo: uid)
+          .limit(15)
           .snapshots()
           .map((snap) {
             final list = snap.docs.map((d) => d.data()).toList();

@@ -3,14 +3,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:razorpay_flutter/razorpay_flutter.dart';
 import '../../../../core/animations/fluid_gesture_dismissible.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_dimensions.dart';
 import '../../../../core/constants/app_typography.dart';
 import '../../../../core/router/route_names.dart';
+import '../../../../core/services/analytics_service.dart';
 import '../../../../core/utils/date_time_utils.dart';
 import '../../../../core/widgets/confetti_burst_overlay.dart';
-import '../../../subscription/presentation/viewmodels/subscription_history_viewmodel.dart';
 import '../../../subscription/presentation/viewmodels/referral_viewmodel.dart';
 import '../../domain/tiffin_item_model.dart';
 import '../viewmodels/cart_viewmodel.dart';
@@ -35,14 +36,109 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
   final TextEditingController _couponController = TextEditingController();
   final TextEditingController _notesController = TextEditingController();
   final GlobalKey<ConfettiBurstOverlayState> _confettiKey = GlobalKey();
+  late final Razorpay _razorpay;
   bool _isPlacingOrder = false;
   String? _couponError;
+  String? _pendingIntentId;
+  bool _pendingIsSingleDay = true;
+  String _pendingSlot = '07:30 AM – 08:00 AM';
+  String _pendingClusterName = '';
+  int _pendingAmount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _razorpay = Razorpay();
+    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _onRazorpaySuccess);
+    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _onRazorpayError);
+    _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, _onRazorpayExternalWallet);
+  }
 
   @override
   void dispose() {
+    _razorpay.clear();
     _couponController.dispose();
     _notesController.dispose();
     super.dispose();
+  }
+
+  Future<void> _onRazorpaySuccess(PaymentSuccessResponse response) async {
+    final intentId = _pendingIntentId;
+    if (intentId == null) {
+      if (mounted) setState(() => _isPlacingOrder = false);
+      return;
+    }
+
+    try {
+      final result = await FirebaseService.instance.verifyAndCreateOrder(
+        intentId: intentId,
+        razorpayOrderId: response.orderId ?? '',
+        razorpayPaymentId: response.paymentId ?? '',
+        razorpaySignature: response.signature ?? '',
+      );
+
+      final orderId = (result['orderId'] as String?) ?? '';
+      final bagToken = (result['bagToken'] as String?) ?? '#HNG-01';
+      final userPhone = ref.read(authProvider).phoneNumber;
+      await NotificationService.instance.clearCartOnOrderSuccess(userPhone);
+      await AnalyticsService.instance.logPurchase(
+        orderId: orderId,
+        totalPayable: _pendingAmount,
+      );
+
+      ref.read(cartViewModelProvider.notifier).reset();
+      if (!mounted) return;
+      _confettiKey.currentState?.burstAtCenter();
+      _showOrderConfirmedDialog(
+        isSingleDay: _pendingIsSingleDay,
+        bagToken: bagToken,
+        deliverySlot: _pendingSlot,
+        clusterName: _pendingClusterName,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.urgentCrimson,
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'Payment verification failed: $e',
+            style: AppTypography.labelLarge.copyWith(color: Colors.white),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isPlacingOrder = false);
+    }
+  }
+
+  void _onRazorpayError(PaymentFailureResponse response) {
+    if (!mounted) return;
+    setState(() => _isPlacingOrder = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: AppColors.urgentCrimson,
+        behavior: SnackBarBehavior.floating,
+        content: Text(
+          response.message ?? 'Payment cancelled or failed. No amount was charged.',
+          style: AppTypography.labelLarge.copyWith(color: Colors.white),
+        ),
+      ),
+    );
+  }
+
+  void _onRazorpayExternalWallet(ExternalWalletResponse response) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: AppColors.textPrimary,
+        behavior: SnackBarBehavior.floating,
+        content: Text(
+          'Redirecting to ${response.walletName ?? 'UPI Wallet'}...',
+          style: AppTypography.labelLarge.copyWith(color: Colors.white),
+        ),
+      ),
+    );
   }
 
   void _applyCoupon([String? presetCode]) {
@@ -88,105 +184,72 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     setState(() => _isPlacingOrder = true);
     HapticFeedback.mediumImpact();
 
-    await Future.delayed(const Duration(milliseconds: 500));
-    if (!mounted) return;
-
-    _confettiKey.currentState?.burstAtCenter();
-
     final isSingleDay = cartState.orderMode == OrderMode.singleDay;
-    final bagToken = DateTimeUtils.generateBagToken(customerState.selectedCluster.name, 4);
-    final targetDate = DateTimeUtils.targetDeliveryDate();
-    final targetDateLabel = DateTimeUtils.targetDeliveryLabel();
+    await AnalyticsService.instance.logBeginCheckout(
+      totalPayable: cartState.totalPayable,
+      mode: isSingleDay ? 'singleDay' : 'subscriptionPass',
+    );
 
-    final itemDetailsList = cartState.itemQuantities.entries.map((entry) {
-      final item = cartState.resolveItem(entry.key);
-      return {
-        'id': entry.key,
-        'name': item?.name ?? entry.key,
-        'price': item?.price ?? 49,
-        'qty': entry.value,
-      };
-    }).toList();
-
-    final singleDaySummary = itemDetailsList.isNotEmpty
-        ? itemDetailsList.map((e) => '${e['qty']}x ${e['name']}').join(', ')
-        : 'Morning Breakfast';
-
-    final userUid = FirebaseService.instance.currentUser?.uid ?? authState.phoneNumber;
-    final userPhone = authState.phoneNumber;
-    final tier = cartState.selectedPassTier ?? PassTierType.routine7Day;
-
-    // Record Live Order, Pass, and Meal Tickets to Cloud Firestore
-    String orderId = '';
     try {
-      orderId = await FirebaseService.instance.recordOrder(
-        userId: userUid,
-        phoneNumber: userPhone,
-        customerName: authState.userName,
+      final intent = await FirebaseService.instance.createOrderIntent(
         orderMode: isSingleDay ? 'singleDay' : 'subscriptionPass',
-        tier: isSingleDay ? null : tier.displayName,
-        tierKey: isSingleDay ? null : tier.name,
-        days: isSingleDay ? 1 : cartState.selectedPassDays,
+        tierKey: isSingleDay ? null : (cartState.selectedPassTier ?? PassTierType.routine7Day).name,
         kitchenId: cartState.activeKitchenId,
-        kitchenName: cartState.activeKitchenName,
         itemQuantities: cartState.itemQuantities,
-        itemDetails: itemDetailsList,
-        totalAmount: cartState.totalPayable,
-        discountAmount: cartState.discountAmount,
         appliedCoupon: cartState.appliedCoupon,
         clusterId: customerState.selectedCluster.id,
         clusterName: customerState.selectedCluster.name,
-        bagToken: bagToken,
-        deliveryDate: targetDateLabel,
-        startDate: targetDate,
         deliverySlot: cartState.selectedDeliverySlot,
-        paymentMethod: cartState.paymentMethod,
         deliveryInstructions: _notesController.text.trim(),
-        companionMeals: cartState.roommateMealCount,
-        specialtyNames: cartState.autoRotatePassMenu
-            ? CustomerDashboardViewModel.khammamSpecialties
-            : const [],
+        paymentMethod: cartState.paymentMethod,
+        customerName: authState.userName,
+        phoneNumber: authState.phoneNumber,
+        autoRotatePassMenu: cartState.autoRotatePassMenu,
       );
 
-      await NotificationService.instance.clearCartOnOrderSuccess(userPhone);
+      _pendingIntentId = intent['intentId'] as String?;
+      _pendingIsSingleDay = isSingleDay;
+      _pendingSlot = cartState.selectedDeliverySlot;
+      _pendingClusterName = customerState.selectedCluster.name;
+      _pendingAmount = (intent['totalAmount'] as num?)?.toInt() ?? cartState.totalPayable;
+
+      _razorpay.open({
+        'key': intent['razorpayKeyId'],
+        'order_id': intent['razorpayOrderId'],
+        'amount': intent['amountInPaise'],
+        'currency': 'INR',
+        'name': 'Hungr Breakfast',
+        'description': isSingleDay ? 'Morning Tiffin Order' : 'Morning Meal Pass',
+        'prefill': {
+          'contact': authState.phoneNumber,
+          'name': authState.userName,
+        },
+        'theme': {'color': '#E23744'},
+      });
     } catch (e) {
-      debugPrint('Firestore order recording notice: $e');
+      if (!mounted) return;
+      setState(() => _isPlacingOrder = false);
+      final msg = e.toString().contains('PAYMENT_NOT_CONFIGURED')
+          ? 'Online payments are not yet activated by the admin. Please add Razorpay keys in Firebase.'
+          : 'Unable to initiate payment: $e';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.urgentCrimson,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+          content: Text(msg, style: AppTypography.labelLarge.copyWith(color: Colors.white)),
+        ),
+      );
     }
+  }
 
-    if (isSingleDay) {
-      // Single-Day Order: Creates 1 scheduled morning meal ticket (NOT a 3-Day Pass)
-      ref.read(customerDashboardProvider.notifier).recordSingleDayOrder(
-            summaryName: singleDaySummary,
-            items: cartState.itemQuantities.keys.toSet(),
-            companionMeals: cartState.roommateMealCount,
-            bagToken: bagToken,
-          );
-    } else {
-      ref.read(customerDashboardProvider.notifier).activateNewPass(
-            tier: tier,
-            combo: 'A',
-            addons: cartState.itemQuantities.keys.toSet(),
-            autoRotateSpecialties: cartState.autoRotatePassMenu,
-            companionMeals: cartState.roommateMealCount,
-            bagToken: bagToken,
-          );
-
-      ref.read(subscriptionHistoryProvider.notifier).addSubscription(
-            tier: tier,
-            combo: 'A',
-            addons: cartState.itemQuantities.keys.toSet(),
-            totalAmount: cartState.totalPayable,
-            clusterName: customerState.selectedCluster.name,
-            orderId: orderId.isNotEmpty ? orderId : null,
-            bagToken: bagToken,
-          );
-    }
-
-    // Reset Cart
-    ref.read(cartViewModelProvider.notifier).reset();
-
-    // Show Confirmation Dialog
-    if (!mounted) return;
+  void _showOrderConfirmedDialog({
+    required bool isSingleDay,
+    required String bagToken,
+    required String deliverySlot,
+    required String clusterName,
+  }) {
+    final targetDateLabel = DateTimeUtils.targetDeliveryLabel();
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -212,7 +275,6 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 10),
-            // Parcel Bag Token Badge
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
@@ -244,35 +306,9 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              'Your breakfast arrives on $targetDateLabel at ${cartState.selectedDeliverySlot} at ${customerState.selectedCluster.name}.',
+              'Your breakfast arrives on $targetDateLabel at $deliverySlot at $clusterName.',
               style: AppTypography.bodyMedium.copyWith(color: AppColors.textSecondary, fontSize: 12),
               textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 10),
-            // WhatsApp Gate Drop Alert Pill
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF0FDF4),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFBBF7D0)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.mark_chat_unread_rounded, size: 16, color: Color(0xFF16A34A)),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      'Automated WhatsApp Drop Alert will ping you the moment Bag $bagToken is placed at the gate security desk.',
-                      style: AppTypography.caption.copyWith(
-                        color: const Color(0xFF15803D),
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
             ),
             const SizedBox(height: 18),
             SizedBox(
@@ -294,8 +330,6 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
         ),
       ),
     );
-
-    setState(() => _isPlacingOrder = false);
   }
 
   @override
@@ -408,13 +442,6 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                               .slideY(begin: 0.06, end: 0, curve: Curves.easeOutCubic),
                           const SizedBox(height: 12),
                         ],
-
-                        // 4B. Roommate Split & Save Companion Drop (Slot 4B: 160ms)
-                        _buildRoommateCompanionCard(cartState, cartNotifier)
-                            .animate()
-                            .fadeIn(delay: 160.ms, duration: 250.ms)
-                            .slideY(begin: 0.06, end: 0, curve: Curves.easeOutCubic),
-                        const SizedBox(height: 12),
 
                         // 5. Promo Code & Offers (Slot 5: 180ms)
                         _buildPromoSection(cartState, cartNotifier)
@@ -1114,143 +1141,6 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     );
   }
 
-  Widget _buildRoommateCompanionCard(CartState cartState, CartViewModel cartNotifier) {
-    final bool hasCompanion = cartState.roommateMealCount > 0;
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: hasCompanion ? const Color(0xFFEFF6FF) : Colors.white,
-        borderRadius: AppDimensions.radius16,
-        border: Border.all(
-          color: hasCompanion ? const Color(0xFF93C5FD) : AppColors.charcoalBorder,
-          width: hasCompanion ? 1.4 : 1.0,
-        ),
-        boxShadow: const [
-          BoxShadow(color: Color(0x08000000), blurRadius: 8, offset: Offset(0, 2)),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: const Color(0xFFDBEAFE),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(Icons.people_alt_rounded, size: 20, color: Color(0xFF1D4ED8)),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      'Roommate Split & Save',
-                      style: AppTypography.titleSmall.copyWith(
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFDCFCE7),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        'SAVE ₹14',
-                        style: AppTypography.caption.copyWith(
-                          fontSize: 8.5,
-                          fontWeight: FontWeight.bold,
-                          color: const Color(0xFF15803D),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Add roommate breakfast for +₹45 (instead of ₹59) • Packed in same gate bag',
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.textSecondary,
-                    fontSize: 10.5,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          if (!hasCompanion)
-            ElevatedButton(
-              onPressed: () {
-                HapticFeedback.lightImpact();
-                cartNotifier.addRoommateMeal();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.zomatoRed,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                minimumSize: const Size(0, 32),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              child: Text(
-                '+ Add (₹45)',
-                style: AppTypography.labelSmall.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 11,
-                ),
-              ),
-            )
-          else
-            Container(
-              height: 32,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF93C5FD)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  InkWell(
-                    onTap: () {
-                      HapticFeedback.lightImpact();
-                      cartNotifier.removeRoommateMeal();
-                    },
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 8),
-                      child: Icon(Icons.remove, size: 14, color: Color(0xFF1D4ED8)),
-                    ),
-                  ),
-                  Text(
-                    '${cartState.roommateMealCount}',
-                    style: AppTypography.labelSmall.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: const Color(0xFF1D4ED8),
-                    ),
-                  ),
-                  InkWell(
-                    onTap: () {
-                      HapticFeedback.lightImpact();
-                      cartNotifier.addRoommateMeal();
-                    },
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 8),
-                      child: Icon(Icons.add, size: 14, color: Color(0xFF1D4ED8)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildPromoSection(CartState cartState, CartViewModel cartNotifier) {
     final bool hasCoupon = cartState.appliedCoupon != null;
 
@@ -1579,7 +1469,7 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     final isSingleDay = cartState.orderMode == OrderMode.singleDay;
     final int subtotal = isSingleDay
         ? cartState.itemsSubtotal
-        : (cartState.passSubtotal + cartState.itemsSubtotal - cartState.roommateSubtotal);
+        : (cartState.passSubtotal + cartState.itemsSubtotal);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1620,13 +1510,19 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text('Gate Drop Delivery', style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary, fontSize: 13)),
-              Row(
-                children: [
-                  Text('₹30', style: AppTypography.caption.copyWith(decoration: TextDecoration.lineThrough, color: AppColors.textSubtle)),
-                  const SizedBox(width: 4),
-                  Text('FREE', style: AppTypography.caption.copyWith(color: AppColors.neonMint, fontWeight: FontWeight.bold)),
-                ],
-              ),
+              if (cartState.deliveryFee == 0)
+                Row(
+                  children: [
+                    Text('₹15', style: AppTypography.caption.copyWith(decoration: TextDecoration.lineThrough, color: AppColors.textSubtle)),
+                    const SizedBox(width: 4),
+                    Text('FREE', style: AppTypography.caption.copyWith(color: AppColors.neonMint, fontWeight: FontWeight.bold)),
+                  ],
+                )
+              else
+                Text(
+                  '₹${cartState.deliveryFee}',
+                  style: AppTypography.titleSmall.copyWith(color: AppColors.textPrimary, fontWeight: FontWeight.bold),
+                ),
             ],
           ),
           const SizedBox(height: 8),
@@ -1637,45 +1533,6 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
               Text('FREE', style: AppTypography.caption.copyWith(color: AppColors.neonMint, fontWeight: FontWeight.bold)),
             ],
           ),
-          if (cartState.roommateMealCount > 0) ...[
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      'Roommate Companion (${cartState.roommateMealCount}x)',
-                      style: AppTypography.bodySmall.copyWith(color: const Color(0xFF1D4ED8), fontSize: 13, fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '(₹45/meal)',
-                      style: AppTypography.caption.copyWith(color: AppColors.textSubtle, fontSize: 10),
-                    ),
-                  ],
-                ),
-                Text(
-                  '+₹${cartState.roommateSubtotal}',
-                  style: AppTypography.titleSmall.copyWith(color: const Color(0xFF1D4ED8), fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Roommate Split Savings',
-                  style: AppTypography.bodySmall.copyWith(color: AppColors.neonMint, fontSize: 13),
-                ),
-                Text(
-                  '-₹${cartState.roommateMealCount * 14}',
-                  style: AppTypography.titleSmall.copyWith(color: AppColors.neonMint, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-          ],
           if (cartState.discountAmount > 0) ...[
             const SizedBox(height: 8),
             Row(

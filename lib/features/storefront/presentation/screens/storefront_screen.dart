@@ -7,7 +7,6 @@ import '../../../../core/constants/app_dimensions.dart';
 import '../../../../core/constants/app_typography.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/utils/date_time_utils.dart';
-import '../../data/shop_sync_service.dart';
 import '../../domain/offer_model.dart';
 import '../../domain/tiffin_item_model.dart';
 import '../../domain/tiffin_shop_model.dart';
@@ -54,34 +53,6 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
   @override
   Widget build(BuildContext context) {
     final customerState = ref.watch(customerDashboardProvider);
-
-    // Real-time kitchen operational broadcast notifications
-    ref.listen(liveOpsEventStreamProvider, (previous, next) {
-      next.whenData((event) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.info_outline_rounded, color: Colors.white, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    event.description,
-                    style: AppTypography.bodySmall.copyWith(color: Colors.white, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ],
-            ),
-            backgroundColor: AppColors.textPrimary,
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            margin: const EdgeInsets.all(16),
-          ),
-        );
-      });
-    });
 
     return PopScope(
       canPop: false,

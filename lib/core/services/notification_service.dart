@@ -59,9 +59,8 @@ class NotificationService {
       // 5. Subscribe to core broadcast and retention topics
       await _fcm.subscribeToTopic('all_users');
       await _fcm.subscribeToTopic('daily_cutoff_reminders');
-      await _fcm.subscribeToTopic('morning_gate_drops');
       await _fcm.subscribeToTopic('promotions');
-      debugPrint('📡 [FCM] Subscribed to all_users, daily_cutoff, morning_gate_drops, and promotions');
+      debugPrint('📡 [FCM] Subscribed to all_users, daily_cutoff_reminders, and promotions');
 
       // 6. Handle Foreground notifications
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {

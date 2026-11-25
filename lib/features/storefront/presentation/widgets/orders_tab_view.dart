@@ -10,7 +10,6 @@ import '../../../subscription/domain/subscription_order_model.dart';
 import '../../../subscription/presentation/viewmodels/subscription_history_viewmodel.dart';
 import '../../../ticket_calendar/domain/meal_ticket_model.dart';
 import '../viewmodels/customer_dashboard_viewmodel.dart';
-import 'gate_heat_preservation_card.dart';
 import 'pass_card_3d.dart';
 
 /// Unified Swiggy-style Orders & Meal Schedule Tab
@@ -202,14 +201,41 @@ class _OrdersTabViewState extends ConsumerState<OrdersTabView> {
           const SizedBox(height: 12),
         ],
 
-        // Only show live Heat Preservation card when an actual meal is delivered today
+        // Clean delivery confirmation badge when an actual meal is delivered today
         if (deliveredToday.isNotEmpty) ...[
-          GateHeatPreservationCard(
-            bagToken: deliveredToday.first.bagToken,
-            clusterName: deliveredToday.first.clusterName,
-            droppedAt: deliveredToday.first.deliveredAt!,
+          Container(
+            padding: const EdgeInsets.all(14),
+            margin: const EdgeInsets.only(bottom: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFECFDF5),
+              borderRadius: AppDimensions.radius16,
+              border: Border.all(color: const Color(0xFF6EE7B7)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded, color: AppColors.neonMint, size: 24),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Delivered at Gate • Bag ${deliveredToday.first.bagToken}',
+                        style: AppTypography.titleSmall.copyWith(
+                          color: const Color(0xFF065F46),
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      Text(
+                        'Dropped at ${DateFormat('hh:mm a').format(deliveredToday.first.deliveredAt!)} • ${deliveredToday.first.clusterName}',
+                        style: AppTypography.caption.copyWith(color: const Color(0xFF047857)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 8),
         ],
 
         ...List.generate(tickets.length, (index) {

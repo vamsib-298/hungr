@@ -1161,6 +1161,75 @@ function updateClock() {
   document.getElementById('live-time').innerText = `${timeStr} IST`;
 }
 
+// Admin Authentication Gate (Firebase Auth + Role Verification)
+function initAdminAuth() {
+  const overlay = document.getElementById('admin-auth-overlay');
+  const signOutBtn = document.getElementById('admin-signout-btn');
+  if (typeof isFirebaseAvailable === 'undefined' || !isFirebaseAvailable || !auth) {
+    return;
+  }
+
+  auth.onAuthStateChanged(async (user) => {
+    if (!user) {
+      if (overlay) overlay.style.display = 'flex';
+      if (signOutBtn) signOutBtn.style.display = 'none';
+      return;
+    }
+
+    try {
+      const tokenRes = await user.getIdTokenResult();
+      let isAdmin = tokenRes.claims && tokenRes.claims.role === 'admin';
+      if (!isAdmin && db) {
+        const uDoc = await db.collection('users').doc(user.uid).get();
+        isAdmin = uDoc.exists && uDoc.data().role === 'admin';
+      }
+
+      if (isAdmin) {
+        if (overlay) overlay.style.display = 'none';
+        if (signOutBtn) signOutBtn.style.display = 'inline-flex';
+        initFirestoreSync();
+      } else {
+        const errBox = document.getElementById('admin-auth-error');
+        if (errBox) {
+          errBox.innerText = 'Access denied: Account does not have admin role in Firestore.';
+          errBox.style.display = 'block';
+        }
+        await auth.signOut();
+      }
+    } catch (e) {
+      console.error('Admin role verification error:', e);
+    }
+  });
+}
+
+async function handleAdminSignIn() {
+  const email = (document.getElementById('admin-login-email')?.value || '').trim();
+  const password = document.getElementById('admin-login-password')?.value || '';
+  const errBox = document.getElementById('admin-auth-error');
+  if (errBox) errBox.style.display = 'none';
+
+  if (!email || !password) {
+    if (errBox) {
+      errBox.innerText = 'Please enter both email and password.';
+      errBox.style.display = 'block';
+    }
+    return;
+  }
+
+  try {
+    await auth.signInWithEmailAndPassword(email, password);
+  } catch (e) {
+    if (errBox) {
+      errBox.innerText = e.message || 'Sign-in failed.';
+      errBox.style.display = 'block';
+    }
+  }
+}
+
+async function handleAdminSignOut() {
+  if (auth) await auth.signOut();
+}
+
 // Initialize on Load
 window.addEventListener('DOMContentLoaded', () => {
   renderShops();
@@ -1170,6 +1239,6 @@ window.addEventListener('DOMContentLoaded', () => {
   updateKPIs();
   updateClock();
   initKhammamMap();
-  initFirestoreSync();
+  initAdminAuth();
   setInterval(updateClock, 1000);
 });

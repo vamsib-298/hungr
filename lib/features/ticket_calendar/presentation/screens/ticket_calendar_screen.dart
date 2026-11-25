@@ -9,7 +9,6 @@ import '../../../../core/constants/app_typography.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/widgets/obsidian_card.dart';
 import '../../../storefront/presentation/viewmodels/customer_dashboard_viewmodel.dart';
-import '../../../storefront/presentation/widgets/gate_heat_preservation_card.dart';
 import '../../domain/meal_ticket_model.dart';
 
 class TicketCalendarScreen extends ConsumerStatefulWidget {
@@ -417,7 +416,7 @@ class _TicketCalendarScreenState extends ConsumerState<TicketCalendarScreen> {
             ),
           ),
 
-          // Live Heat Preservation Window Card (ONLY shown when an actual meal is delivered today)
+          // Clean delivery confirmation badge when an actual meal is delivered today
           if (tickets.any((t) => t.status == TicketStatusType.delivered && t.deliveredAt != null))
             SliverToBoxAdapter(
               child: Padding(
@@ -427,11 +426,26 @@ class _TicketCalendarScreenState extends ConsumerState<TicketCalendarScreen> {
                     final delivered = tickets.firstWhere(
                       (t) => t.status == TicketStatusType.delivered && t.deliveredAt != null,
                     );
-                    return GateHeatPreservationCard(
-                      bagToken: delivered.bagToken,
-                      clusterName: delivered.clusterName,
-                      gateLocationDetail: 'Main Gate Security Desk',
-                      droppedAt: delivered.deliveredAt!,
+                    return Container(
+                      padding: const EdgeInsets.all(12),
+                      margin: const EdgeInsets.only(bottom: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFECFDF5),
+                        borderRadius: AppDimensions.radius12,
+                        border: Border.all(color: const Color(0xFF6EE7B7)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.check_circle_rounded, color: AppColors.neonMint, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Delivered • Bag ${delivered.bagToken} at ${delivered.clusterName}',
+                              style: AppTypography.labelLarge.copyWith(color: const Color(0xFF065F46)),
+                            ),
+                          ),
+                        ],
+                      ),
                     );
                   },
                 ),

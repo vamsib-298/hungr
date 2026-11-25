@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/constants/business_rules.dart';
+import '../../../../core/services/analytics_service.dart';
 import '../../../../core/services/firebase_service.dart';
 import '../../domain/offer_model.dart';
 import '../../domain/tiffin_item_model.dart';
@@ -25,7 +26,6 @@ class CartState {
   final int discountAmount;
   final String deliveryInstructions;
   final String paymentMethod;
-  final int roommateMealCount; // +₹45 Companion Meal (Same Gate Bag)
   final bool autoRotatePassMenu;
 
   const CartState({
@@ -41,7 +41,6 @@ class CartState {
     this.discountAmount = 0,
     this.deliveryInstructions = '',
     this.paymentMethod = 'Google Pay',
-    this.roommateMealCount = 0,
     this.autoRotatePassMenu = true,
   });
 
@@ -52,9 +51,6 @@ class CartState {
     return itemDetails[itemId] ?? TiffinItem.findById(itemId);
   }
 
-  /// Total cost of companion roommate meals (₹45 each, instead of ₹59)
-  int get roommateSubtotal => roommateMealCount * 45;
-
   /// Subtotal for individual single-day menu items & addons
   int get itemsSubtotal {
     int sum = 0;
@@ -64,7 +60,7 @@ class CartState {
         sum += item.price * entry.value;
       }
     }
-    return sum + roommateSubtotal;
+    return sum;
   }
 
   /// Price of selected subscription pass tier
@@ -78,6 +74,14 @@ class CartState {
       case PassTierType.power15Day:
         return BusinessRules.pass15DayPrice;
     }
+  }
+
+  /// Unit-economics protection: ₹15 gate drop fee on single-day orders under ₹149;
+  /// FREE for all Pass holders and orders ≥ ₹149.
+  int get deliveryFee {
+    if (orderMode == OrderMode.subscriptionPass) return 0;
+    if (itemsSubtotal >= 149) return 0;
+    return 15;
   }
 
   /// Total customer savings including item discounts, pass subsidies, and coupons
@@ -99,31 +103,30 @@ class CartState {
       }
     }
 
-    final roommateSavings = roommateMealCount * 14;
-    return itemSavings + passSavings + discountAmount + roommateSavings;
+    return itemSavings + passSavings + discountAmount;
   }
 
-  /// Final payable amount after deducting active coupon discounts
+  /// Final payable amount including delivery fee and deducting active coupon discounts
   int get totalPayable {
     final baseAmount = orderMode == OrderMode.subscriptionPass
         ? passSubtotal + itemsSubtotal
         : itemsSubtotal;
 
-    final payable = baseAmount - discountAmount;
+    final payable = baseAmount + deliveryFee - discountAmount;
     return payable > 0 ? payable : 0;
   }
 
   /// Total count of individual items selected in the cart
   int get totalItemCount {
-    return itemQuantities.values.fold(0, (sum, qty) => sum + qty) + roommateMealCount;
+    return itemQuantities.values.fold(0, (sum, qty) => sum + qty);
   }
 
   /// Whether cart currently has any items or a valid pass configured
   bool get isEmpty {
     if (orderMode == OrderMode.subscriptionPass) {
-      return selectedPassTier == null && itemQuantities.isEmpty && roommateMealCount == 0;
+      return selectedPassTier == null && itemQuantities.isEmpty;
     }
-    return itemQuantities.isEmpty && roommateMealCount == 0;
+    return itemQuantities.isEmpty;
   }
 
   CartState copyWith({
@@ -142,7 +145,6 @@ class CartState {
     int? discountAmount,
     String? deliveryInstructions,
     String? paymentMethod,
-    int? roommateMealCount,
     bool? autoRotatePassMenu,
   }) {
     return CartState(
@@ -158,7 +160,6 @@ class CartState {
       discountAmount: discountAmount ?? this.discountAmount,
       deliveryInstructions: deliveryInstructions ?? this.deliveryInstructions,
       paymentMethod: paymentMethod ?? this.paymentMethod,
-      roommateMealCount: roommateMealCount ?? this.roommateMealCount,
       autoRotatePassMenu: autoRotatePassMenu ?? this.autoRotatePassMenu,
     );
   }
@@ -186,6 +187,7 @@ class CartViewModel extends StateNotifier<CartState> {
       itemQuantities: {item.id: 1},
       itemDetails: {item.id: item},
     );
+    AnalyticsService.instance.logAddToCart(itemId: item.id, itemName: item.name, price: item.price);
     _syncCartTracking();
   }
 
@@ -206,6 +208,7 @@ class CartViewModel extends StateNotifier<CartState> {
       itemQuantities: updatedQty,
       itemDetails: updatedDetails,
     );
+    AnalyticsService.instance.logAddToCart(itemId: item.id, itemName: item.name, price: item.price);
     _syncCartTracking();
   }
 
@@ -247,16 +250,6 @@ class CartViewModel extends StateNotifier<CartState> {
     _syncCartTracking();
   }
 
-  void addRoommateMeal() {
-    state = state.copyWith(roommateMealCount: state.roommateMealCount + 1);
-  }
-
-  void removeRoommateMeal() {
-    if (state.roommateMealCount > 0) {
-      state = state.copyWith(roommateMealCount: state.roommateMealCount - 1);
-    }
-  }
-
   void toggleAutoRotatePassMenu(bool value) {
     state = state.copyWith(autoRotatePassMenu: value);
   }
@@ -280,7 +273,6 @@ class CartViewModel extends StateNotifier<CartState> {
       clearKitchen: true,
       clearCoupon: true,
       discountAmount: 0,
-      roommateMealCount: 0,
     );
     _syncCartTracking();
   }
@@ -313,7 +305,7 @@ class CartViewModel extends StateNotifier<CartState> {
     state = state.copyWith(selectedDeliverySlot: slot);
   }
 
-  /// Apply coupon against live Firestore offers (and return error message if invalid / below minOrder)
+  /// Apply coupon against live Firestore offers (returns error message if invalid / below minOrder)
   String? applyCoupon(String code, {List<OfferModel> availableOffers = const []}) {
     final normalized = code.trim().toUpperCase();
     if (normalized.isEmpty) return 'Enter a promo code.';
@@ -339,7 +331,7 @@ class CartViewModel extends StateNotifier<CartState> {
       appliedCoupon: offer.code,
       discountAmount: discount,
     );
-    return null; // null = success
+    return null;
   }
 
   void removeCoupon() {

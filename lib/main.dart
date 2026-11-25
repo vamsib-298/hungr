@@ -1,10 +1,13 @@
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/router/app_router.dart';
-import 'core/theme/app_theme.dart';
+import 'core/services/analytics_service.dart';
 import 'core/services/firebase_service.dart';
 import 'core/services/notification_service.dart';
+import 'core/theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,10 +15,20 @@ void main() async {
   // Initialize Firebase (Auth, Firestore, Cloud Functions)
   await FirebaseService.instance.init();
 
+  // Initialize Production Crash Reporting & Funnel Analytics
+  if (FirebaseService.instance.isInitialized && !kIsWeb) {
+    FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
+    PlatformDispatcher.instance.onError = (error, stack) {
+      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+      return true;
+    };
+  }
+  AnalyticsService.instance.init();
+
   // Initialize FCM Push Notifications & Retention Habit Triggers
   await NotificationService.instance.init(null);
 
-  // System UI overlay configuration for Android 15 Edge-to-Edge and Light Theme
+  // System UI overlay configuration for Android Edge-to-Edge and Light Theme
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(

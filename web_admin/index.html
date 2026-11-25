@@ -35,8 +35,32 @@
         <span>KHAMMAM MORNING OPS LIVE</span>
       </div>
       <div class="time-pill" id="live-time">07:30 AM IST</div>
+      <button class="btn btn-secondary" id="admin-signout-btn" style="display:none; padding: 6px 12px; font-size: 12px;" onclick="handleAdminSignOut()">Sign Out</button>
     </div>
   </header>
+
+  <!-- ADMIN AUTHENTICATION GATE OVERLAY -->
+  <div id="admin-auth-overlay" style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.96); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 20px;">
+    <div style="background: #1E293B; border: 1px solid #334155; border-radius: 18px; padding: 28px; width: 100%; max-width: 400px; color: #F8FAFC; box-shadow: 0 25px 50px rgba(0,0,0,0.5);">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+        <div class="brand-badge">H</div>
+        <div>
+          <h2 style="margin:0; font-size:18px; font-weight:800;">Hungr Admin Sign In</h2>
+          <p style="margin:2px 0 0; font-size:12px; color:#94A3B8;">Authorized Operations & Kitchen Team Only</p>
+        </div>
+      </div>
+      <div class="form-group">
+        <label style="color:#CBD5E1;">Admin Email</label>
+        <input type="email" id="admin-login-email" placeholder="admin@hungr.app" style="width:100%; padding:10px 12px; border-radius:10px; border:1px solid #475569; background:#0F172A; color:#fff;">
+      </div>
+      <div class="form-group">
+        <label style="color:#CBD5E1;">Password</label>
+        <input type="password" id="admin-login-password" placeholder="Enter password" style="width:100%; padding:10px 12px; border-radius:10px; border:1px solid #475569; background:#0F172A; color:#fff;">
+      </div>
+      <div id="admin-auth-error" style="color:#F87171; font-size:12px; margin-bottom:10px; display:none;"></div>
+      <button class="btn btn-primary" style="width:100%; padding:12px; font-weight:700;" onclick="handleAdminSignIn()">Sign In to Operations</button>
+    </div>
+  </div>
 
   <!-- Metric Banner KPI Cards -->
   <section class="metrics-grid">

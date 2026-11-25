@@ -1,11 +1,7 @@
-import 'dart:convert';
-import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
 
-/// Local Persistent Storage Service
-/// Persists authentication session, user profile, chosen delivery cluster,
-/// and pass information across app launches using a robust, pure Dart JSON storage.
-///
-/// Requires ZERO third-party native Android plugins or Gradle dependencies.
+/// Production Local Persistent Storage Service backed by Android/iOS SharedPreferences
+/// with an in-memory fallback for headless unit tests.
 class LocalStorageService {
   LocalStorageService._();
   static final LocalStorageService instance = LocalStorageService._();
@@ -25,71 +21,44 @@ class LocalStorageService {
   static const String _keyReferralCount = 'hungr_referral_count';
   static const String _keyFreePassClaimed = 'hungr_free_pass_claimed';
 
-  final Map<String, dynamic> _memoryCache = {};
-  bool _isInitialized = false;
-  File? _storeFile;
+  SharedPreferences? _prefs;
+  final Map<String, Object> _memoryFallback = {};
+  bool _initialized = false;
 
   Future<void> _ensureInitialized() async {
-    if (_isInitialized) return;
-
+    if (_initialized) return;
     try {
-      _storeFile = _resolveStoreFile();
-      if (_storeFile != null && await _storeFile!.exists()) {
-        final content = await _storeFile!.readAsString();
-        if (content.trim().isNotEmpty) {
-          final decoded = jsonDecode(content);
-          if (decoded is Map<String, dynamic>) {
-            _memoryCache.addAll(decoded);
-          }
-        }
-      }
+      _prefs = await SharedPreferences.getInstance();
     } catch (_) {
-      // Graceful fallback to memoryCache if file system is inaccessible
+      _prefs = null;
     } finally {
-      _isInitialized = true;
+      _initialized = true;
     }
   }
 
-  File? _resolveStoreFile() {
-    try {
-      // On Android / Mobile, try internal app directory
-      final baseDir = Directory.systemTemp.parent;
-      final candidates = [
-        Directory('${baseDir.path}/app_flutter'),
-        Directory('${baseDir.path}/files'),
-        Directory.systemTemp,
-      ];
-
-      for (final dir in candidates) {
-        try {
-          if (!dir.existsSync()) {
-            dir.createSync(recursive: true);
-          }
-          final testFile = File('${dir.path}/hungr_local_store.json');
-          return testFile;
-        } catch (_) {
-          continue;
-        }
-      }
-    } catch (_) {}
-
-    // Fallback to system temp
-    try {
-      return File('${Directory.systemTemp.path}/hungr_local_store.json');
-    } catch (_) {
-      return null;
-    }
+  Future<void> _setBool(String key, bool value) async {
+    _memoryFallback[key] = value;
+    await _prefs?.setBool(key, value);
   }
 
-  Future<void> _persistToDisk() async {
-    if (_storeFile == null) return;
-    try {
-      final jsonString = jsonEncode(_memoryCache);
-      await _storeFile!.writeAsString(jsonString, flush: true);
-    } catch (_) {
-      // In-memory cache continues to serve reads seamlessly
-    }
+  Future<void> _setString(String key, String value) async {
+    _memoryFallback[key] = value;
+    await _prefs?.setString(key, value);
   }
+
+  Future<void> _setInt(String key, int value) async {
+    _memoryFallback[key] = value;
+    await _prefs?.setInt(key, value);
+  }
+
+  Future<void> _remove(String key) async {
+    _memoryFallback.remove(key);
+    await _prefs?.remove(key);
+  }
+
+  bool? _getBool(String key) => _prefs?.getBool(key) ?? _memoryFallback[key] as bool?;
+  String? _getString(String key) => _prefs?.getString(key) ?? _memoryFallback[key] as String?;
+  int? _getInt(String key) => _prefs?.getInt(key) ?? _memoryFallback[key] as int?;
 
   // --- Auth & User Profile ---
 
@@ -99,36 +68,34 @@ class LocalStorageService {
     String? clusterName,
   }) async {
     await _ensureInitialized();
-    _memoryCache[_keyIsAuthenticated] = true;
-    _memoryCache[_keyUserPhone] = phone;
-    _memoryCache[_keyUserName] = name;
+    await _setBool(_keyIsAuthenticated, true);
+    await _setString(_keyUserPhone, phone);
+    await _setString(_keyUserName, name);
     if (clusterName != null) {
-      _memoryCache[_keyClusterName] = clusterName;
+      await _setString(_keyClusterName, clusterName);
     }
-    await _persistToDisk();
   }
 
   Future<bool> isAuthenticated() async {
     await _ensureInitialized();
-    return _memoryCache[_keyIsAuthenticated] as bool? ?? false;
+    return _getBool(_keyIsAuthenticated) ?? false;
   }
 
   Future<Map<String, String>> getUserSession() async {
     await _ensureInitialized();
     return {
-      'phone': (_memoryCache[_keyUserPhone] as String?) ?? '+91 98765 43210',
-      'name': (_memoryCache[_keyUserName] as String?) ?? 'Hungr Foodie',
-      'clusterName': (_memoryCache[_keyClusterName] as String?) ?? 'Hostel Security Gate',
+      'phone': _getString(_keyUserPhone) ?? '',
+      'name': _getString(_keyUserName) ?? 'Hungr Foodie',
+      'clusterName': _getString(_keyClusterName) ?? 'Hostel Security Gate',
     };
   }
 
   Future<void> clearUserSession() async {
     await _ensureInitialized();
-    _memoryCache.remove(_keyIsAuthenticated);
-    _memoryCache.remove(_keyUserPhone);
-    _memoryCache.remove(_keyUserName);
-    _memoryCache.remove(_keyHasActivePass);
-    await _persistToDisk();
+    await _remove(_keyIsAuthenticated);
+    await _remove(_keyUserPhone);
+    await _remove(_keyUserName);
+    await _remove(_keyHasActivePass);
   }
 
   // --- Delivery Cluster ---
@@ -140,22 +107,21 @@ class LocalStorageService {
     required String landmark,
   }) async {
     await _ensureInitialized();
-    _memoryCache[_keyClusterId] = id;
-    _memoryCache[_keyClusterName] = name;
-    _memoryCache[_keyClusterZone] = zone;
-    _memoryCache[_keyClusterLandmark] = landmark;
-    await _persistToDisk();
+    await _setString(_keyClusterId, id);
+    await _setString(_keyClusterName, name);
+    await _setString(_keyClusterZone, zone);
+    await _setString(_keyClusterLandmark, landmark);
   }
 
   Future<Map<String, String>?> getSavedCluster() async {
     await _ensureInitialized();
-    final id = _memoryCache[_keyClusterId] as String?;
+    final id = _getString(_keyClusterId);
     if (id == null) return null;
     return {
       'id': id,
-      'name': (_memoryCache[_keyClusterName] as String?) ?? 'Sri Sai Boys Hostel Gate',
-      'zone': (_memoryCache[_keyClusterZone] as String?) ?? 'Bypass Road, Khammam',
-      'landmark': (_memoryCache[_keyClusterLandmark] as String?) ?? 'Near Bus Stand, Khammam',
+      'name': _getString(_keyClusterName) ?? 'Sri Sai Boys Hostel Main Gate',
+      'zone': _getString(_keyClusterZone) ?? 'Bypass Road, Khammam',
+      'landmark': _getString(_keyClusterLandmark) ?? 'Near New Collectorate Arch',
     };
   }
 
@@ -169,43 +135,42 @@ class LocalStorageService {
     required String tomorrowCombo,
   }) async {
     await _ensureInitialized();
-    _memoryCache[_keyHasActivePass] = hasActivePass;
-    _memoryCache[_keyPassTier] = tier;
-    _memoryCache[_keyMealsRemaining] = mealsRemaining;
-    _memoryCache[_keyTotalMeals] = totalMeals;
-    _memoryCache[_keyTomorrowCombo] = tomorrowCombo;
-    await _persistToDisk();
+    await _setBool(_keyHasActivePass, hasActivePass);
+    await _setString(_keyPassTier, tier);
+    await _setInt(_keyMealsRemaining, mealsRemaining);
+    await _setInt(_keyTotalMeals, totalMeals);
+    await _setString(_keyTomorrowCombo, tomorrowCombo);
   }
 
   Future<Map<String, dynamic>?> getSavedPassState() async {
     await _ensureInitialized();
-    if (!_memoryCache.containsKey(_keyHasActivePass)) return null;
+    final hasPass = _getBool(_keyHasActivePass);
+    if (hasPass == null) return null;
     return {
-      'hasActivePass': _memoryCache[_keyHasActivePass] as bool? ?? false,
-      'tier': (_memoryCache[_keyPassTier] as String?) ?? 'routine7Day',
-      'mealsRemaining': (_memoryCache[_keyMealsRemaining] as int?) ?? 5,
-      'totalMeals': (_memoryCache[_keyTotalMeals] as int?) ?? 7,
-      'tomorrowCombo': (_memoryCache[_keyTomorrowCombo] as String?) ?? 'A',
+      'hasActivePass': hasPass,
+      'tier': _getString(_keyPassTier) ?? 'routine7Day',
+      'mealsRemaining': _getInt(_keyMealsRemaining) ?? 0,
+      'totalMeals': _getInt(_keyTotalMeals) ?? 0,
+      'tomorrowCombo': _getString(_keyTomorrowCombo) ?? 'A',
     };
   }
 
-  // --- Viral Referral Loop ---
+  // --- Referral ---
 
   Future<void> saveReferralState({
     required int count,
     required bool isClaimed,
   }) async {
     await _ensureInitialized();
-    _memoryCache[_keyReferralCount] = count;
-    _memoryCache[_keyFreePassClaimed] = isClaimed;
-    await _persistToDisk();
+    await _setInt(_keyReferralCount, count);
+    await _setBool(_keyFreePassClaimed, isClaimed);
   }
 
   Future<Map<String, dynamic>> getReferralState() async {
     await _ensureInitialized();
     return {
-      'count': (_memoryCache[_keyReferralCount] as int?) ?? 3,
-      'isClaimed': (_memoryCache[_keyFreePassClaimed] as bool?) ?? false,
+      'count': _getInt(_keyReferralCount) ?? 0,
+      'isClaimed': _getBool(_keyFreePassClaimed) ?? false,
     };
   }
 }

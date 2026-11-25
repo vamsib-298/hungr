@@ -7,7 +7,6 @@ import 'package:hungr/features/storefront/domain/tiffin_item_model.dart';
 import 'package:hungr/features/storefront/presentation/viewmodels/cart_viewmodel.dart';
 import 'package:hungr/features/storefront/presentation/viewmodels/tiffin_shops_viewmodel.dart';
 import 'package:hungr/features/storefront/domain/tiffin_shop_model.dart';
-import 'package:hungr/features/storefront/data/shop_sync_service.dart';
 
 void main() {
   group('1. Bag Token Generator & Cutoff Utils', () {
@@ -43,7 +42,7 @@ void main() {
     });
   });
 
-  group('3. Live Catalog Parsing, Kitchen Conflict & Coupon Engine', () {
+  group('3. Live Catalog Parsing, Kitchen Conflict & Delivery Fee Economics', () {
     test('TiffinItem.fromMap safely parses minimal web_admin dish payload', () {
       final item = TiffinItem.fromMap({
         'id': 'custom_dosa_1',
@@ -58,7 +57,7 @@ void main() {
       expect(item.shopName, equals('Sri Kitchen'));
     });
 
-    test('CartViewModel enforces single-kitchen consistency and applies live offers', () {
+    test('CartViewModel enforces single-kitchen consistency, delivery fee, and live offers', () {
       final container = ProviderContainer();
       addTearDown(container.dispose);
 
@@ -72,10 +71,12 @@ void main() {
         shopName: 'Kitchen B',
       );
 
+      // ₹98 single-day order (< ₹149) has ₹15 delivery fee
       cartNotifier.addTiffinItem(dishA);
       cartNotifier.addTiffinItem(dishA);
       expect(container.read(cartProvider).activeKitchenId, equals('shop_a'));
       expect(cartNotifier.hasKitchenConflict(dishB), isTrue);
+      expect(container.read(cartProvider).deliveryFee, equals(15));
 
       // ₹98 < ₹99 minOrder for FIRST50
       final minOrderErr = cartNotifier.applyCoupon(
@@ -84,8 +85,10 @@ void main() {
       );
       expect(minOrderErr, isNotNull);
 
-      // ₹147 >= ₹99 unlocks FIRST50
+      // Adding 2 more items brings subtotal to ₹196 (>= ₹149 -> FREE delivery, >= ₹99 -> FIRST50 valid)
       cartNotifier.addTiffinItem(dishA);
+      cartNotifier.addTiffinItem(dishA);
+      expect(container.read(cartProvider).deliveryFee, equals(0));
       final error = cartNotifier.applyCoupon(
         'FIRST50',
         availableOffers: OfferModel.defaultOffers,
@@ -95,51 +98,25 @@ void main() {
     });
   });
 
-  group('4. Real-time Live Sync (Web Admin ⇄ Mobile App)', () {
-    test('ShopSyncService updates shop status and emits live ops event', () async {
+  group('4. TiffinShopsViewModel Live State', () {
+    test('TiffinShopsViewModel updates shop status and dish price', () {
       final container = ProviderContainer();
       addTearDown(container.dispose);
 
-      final syncService = container.read(shopSyncServiceProvider);
-      final events = <OpsSyncEvent>[];
-      final subscription = syncService.eventStream.listen(events.add);
-      addTearDown(subscription.cancel);
-
-      final shopsInitial = container.read(tiffinShopsProvider);
-      final udupi = shopsInitial.firstWhere((s) => s.id == 'shop_sai_udupi');
-      expect(udupi.status, equals(ShopStatus.closedTemporary));
-
-      syncService.applyShopStatusUpdate(
-        shopId: 'shop_sai_udupi',
-        status: ShopStatus.open,
-      );
-
-      final shopsUpdated = container.read(tiffinShopsProvider);
-      final udupiUpdated = shopsUpdated.firstWhere((s) => s.id == 'shop_sai_udupi');
-      expect(udupiUpdated.status, equals(ShopStatus.open));
-      expect(udupiUpdated.isOpen, isTrue);
-
-      await Future.delayed(const Duration(milliseconds: 50));
-      expect(events.length, equals(1));
-      expect(events.first.action, equals(OpsSyncAction.statusChange));
-      expect(events.first.description.contains('Open'), isTrue);
-    });
-
-    test('ShopSyncService updates item price dynamically', () async {
-      final container = ProviderContainer();
-      addTearDown(container.dispose);
-
-      final syncService = container.read(shopSyncServiceProvider);
-      syncService.applyDishPriceUpdate(
-        shopId: 'shop_venkateshwara',
-        itemId: 'item_set_dosa',
-        newPrice: 55,
-      );
+      final vm = container.read(tiffinShopsProvider.notifier);
+      vm.updateShopStatus(shopId: 'shop_sai_udupi', status: ShopStatus.open);
+      vm.updateMenuItemPrice(shopId: 'shop_venkateshwara', itemId: 'item_set_dosa', newPrice: 55);
 
       final shops = container.read(tiffinShopsProvider);
-      final venkateshwara = shops.firstWhere((s) => s.id == 'shop_venkateshwara');
-      final setDosa = venkateshwara.menuItems.firstWhere((i) => i.id == 'item_set_dosa');
-      expect(setDosa.price, equals(55));
+      expect(shops.firstWhere((s) => s.id == 'shop_sai_udupi').isOpen, isTrue);
+      expect(
+        shops
+            .firstWhere((s) => s.id == 'shop_venkateshwara')
+            .menuItems
+            .firstWhere((i) => i.id == 'item_set_dosa')
+            .price,
+        equals(55),
+      );
     });
   });
 }

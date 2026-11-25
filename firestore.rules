@@ -2,7 +2,6 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper functions for Role-Based Access Control (RBAC)
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -15,138 +14,115 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
-    function isDriver() {
-      return isAuthenticated() && (getUserData().role == 'driver' || request.auth.token.role == 'driver');
-    }
-
     function isAdmin() {
-      return isAuthenticated() && (getUserData().role == 'admin' || request.auth.token.role == 'admin');
+      return isAuthenticated() &&
+        (request.auth.token.role == 'admin' ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          getUserData().role == 'admin'));
     }
 
-    // Server-side timestamp validation helper for 21:00 IST Cutoff:
-    // IST is UTC + 5 hours 30 minutes. 21:00 IST corresponds to 15:30 UTC.
+    // IST is UTC + 5h30m. 21:00 IST = 15:30 UTC.
     function isBeforeIstCutoff() {
       let utcHours = request.time.toMillis() / 1000 / 3600 % 24;
       let utcMinutes = request.time.toMillis() / 1000 / 60 % 60;
-      // 15:30 UTC = 21:00 IST
       return (utcHours < 15) || (utcHours == 15 && utcMinutes < 30);
     }
 
-    // User Profile Document
-    match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == userId;
-      allow update: if isOwner(userId) || isAdmin();
-      allow delete: if isOwner(userId) || isAdmin(); // DPDP Act & Play Store compliance
+    // Public Payment & App Config (public keyId only; secrets stay in server-only /secrets)
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
     }
 
-    // Pre-configured Delivery Clusters
+    // Server-only secrets (never readable by clients)
+    match /secrets/{docId} {
+      allow read, write: if false;
+    }
+
+    // User Profiles: strict owner or admin read/write (no cross-user PII scraping)
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) &&
+        (!('role' in request.resource.data) || request.resource.data.role == 'customer');
+      allow update: if isAdmin() ||
+        (isOwner(userId) &&
+         (!('role' in request.resource.data) || request.resource.data.role == resource.data.role));
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    // Delivery Clusters
     match /clusters/{clusterId} {
       allow read: if true;
       allow create: if isAuthenticated();
       allow update, delete: if isAdmin();
     }
 
-    // Pass Subscriptions
+    // Pass Subscriptions: created/updated ONLY via trusted Cloud Functions (Admin SDK)
     match /passes/{passId} {
-      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isDriver() || isAdmin());
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      // Cannot extend pass beyond hardExpiryDate ceiling
-      allow update: if isAuthenticated() && (
-        isAdmin() ||
-        (resource.data.userId == request.auth.uid && request.resource.data.hardExpiryDate == resource.data.hardExpiryDate)
-      );
-      allow delete: if isAdmin();
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAdmin();
     }
 
-    // Meal Tickets Ledger
+    // Meal Tickets Ledger: created via Cloud Functions; customer can swap combo before 21:00 IST
     match /meal_tickets/{ticketId} {
-      allow read: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid ||
-        resource.data.assignedDriverId == request.auth.uid ||
-        isDriver() ||
-        isAdmin()
-      );
-
-      // Meal Ticket creation allowed only via verified Pass purchase
-      allow create: if isAuthenticated() && (
-        request.resource.data.userId == request.auth.uid || isAdmin()
-      );
-
-      // Customer modification / skip strictly gated before 21:00 IST (15:30 UTC)
-      allow update: if isAuthenticated() && (
-        isAdmin() ||
-        // Driver can update status to DELIVERED and set dropProofImageUrl
-        (isDriver() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'dropProofImageUrl', 'deliveredAt'])) ||
-        // Customer can only modify combo or pause/resume before 21:00 IST cutoff
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() ||
         (isOwner(resource.data.userId) &&
          isBeforeIstCutoff() &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['comboSelection', 'addOns', 'status']))
-      );
-
-      allow delete: if isAdmin();
+         resource.data.status == 'SCHEDULED' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['comboSelection', 'addOns']));
     }
 
-    // Daily Inventory & Batch Locks
-    match /daily_inventory/{date} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    // Driver Manifests
-    match /driver_manifests/{manifestId} {
-      allow read: if isAuthenticated() && (isDriver() || isAdmin());
-      allow write: if isAuthenticated() && (isDriver() || isAdmin());
-    }
-
-    // Kitchen Batches (21:01 IST Aggregations)
+    // Kitchen Batches
     match /kitchen_batches/{batchId} {
-      allow read: if isAuthenticated() && isAdmin();
-      allow write: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
-    // Partner Tiffin Kitchens & Menus (Live sync with Web Admin)
+    // Partner Tiffin Kitchens & Menus
     match /tiffin_shops/{shopId} {
-      allow read: if true; // Publicly readable for customer apps
-      allow write: if isAuthenticated() && (isAdmin() || request.auth.token.role == 'partner');
+      allow read: if true;
+      allow write: if isAdmin();
 
       match /dishes/{dishId} {
         allow read: if true;
-        allow write: if isAuthenticated() && (isAdmin() || request.auth.token.role == 'partner');
+        allow write: if isAdmin();
       }
     }
 
-    // Promotional Offers & Home Banners
+    // Promotional Offers & Banners
     match /offers/{offerId} {
-      allow read: if true; // Publicly readable for discounts & banners
-      allow write: if isAuthenticated() && isAdmin();
+      allow read: if true;
+      allow write: if isAdmin();
     }
 
-    // Customer Orders Ledger (Zero Dummy Data)
+    // Customer Orders Ledger: created ONLY via Cloud Functions after payment verification
     match /orders/{orderId} {
-      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.phoneNumber == request.auth.token.phone_number || isAdmin());
-      allow create: if isAuthenticated();
-      allow update, delete: if isAdmin();
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAdmin();
     }
 
-    // FCM Device Tokens
+    // FCM Device Tokens: strict owner write, admin read
     match /fcm_tokens/{tokenId} {
-      allow read, write: if true;
+      allow read: if isAdmin();
+      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
     }
 
-    // Abandoned Cart Recovery Sessions
+    // Abandoned Cart Recovery Sessions: owner or admin only
     match /abandoned_carts/{cartId} {
-      allow read, write: if true;
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
+      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
     }
 
-    // Admin Push Notifications Dispatch Queue & History
+    // Admin Push Notifications Dispatch Queue & History: Admin only (stops anonymous spam!)
     match /notifications_queue/{queueId} {
-      allow read, write: if true; // Admin web command dispatches queue
+      allow read, write: if isAdmin();
     }
 
     match /notifications_history/{historyId} {
-      allow read: if true;
-      allow write: if true;
+      allow read, write: if isAdmin();
     }
   }
 }

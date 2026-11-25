@@ -32,6 +32,8 @@ class HungrNetworkImage extends StatelessWidget {
         fit: fit,
         width: width,
         height: height,
+        memCacheWidth: width != null ? (width! * 2.5).round() : 600,
+        memCacheHeight: height != null ? (height! * 2.5).round() : 450,
         placeholder: (context, url) => Shimmer.fromColors(
           baseColor: const Color(0xFFF3F4F6),
           highlightColor: const Color(0xFFE5E7EB),

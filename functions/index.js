@@ -1,51 +1,468 @@
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
+const crypto = require("crypto");
+const https = require("https");
 
 admin.initializeApp();
 const db = admin.firestore();
 
-/**
- * Helper to get current Indian Standard Time (UTC + 5:30)
- */
+const PASS_PRICES = {
+  trial3Day: { title: "3-Day Starter Pass", days: 3, price: 165, expiryDays: 5 },
+  routine7Day: { title: "7-Day Routine Pass", days: 7, price: 350, expiryDays: 10 },
+  power15Day: { title: "15-Day Power Pass", days: 15, price: 720, expiryDays: 20 },
+};
+
+const KHAMMAM_SPECIALTIES = [
+  "Rayalaseema Set Dosa & Coconut Chutney",
+  "Steaming Ghee Thatte Idlis + Medu Vada",
+  "Homestyle Poori Masala (Amma Chethi Vanta)",
+  "MLA Pesarattu Upma & Ginger Pachadi",
+  "Crisp Mysore Bonda & Drumstick Sambar",
+  "Karnataka Udupi Ghee Roast Dosa",
+];
+
 function getNowIst() {
   const utcNow = new Date();
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  return new Date(utcNow.getTime() + istOffset);
+  return new Date(utcNow.getTime() + 5.5 * 60 * 60 * 1000);
+}
+
+function getTargetDeliveryDateIst() {
+  const ist = getNowIst();
+  const isAfterCutoff = ist.getUTCHours() >= 21;
+  const daysToAdd = isAfterCutoff ? 2 : 1;
+  return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate() + daysToAdd, 2, 0, 0));
+}
+
+async function requireAdmin(context) {
+  if (!context.auth) {
+    throw new functions.https.HttpsError("unauthenticated", "Authentication required.");
+  }
+  if (context.auth.token && context.auth.token.role === "admin") return;
+  const userDoc = await db.collection("users").doc(context.auth.uid).get();
+  if (!userDoc.exists || userDoc.data().role !== "admin") {
+    throw new functions.https.HttpsError("permission-denied", "Admin privileges required.");
+  }
+}
+
+async function commitInChunks(operations, chunkSize = 450) {
+  for (let i = 0; i < operations.length; i += chunkSize) {
+    const chunk = operations.slice(i, i + chunkSize);
+    const batch = db.batch();
+    chunk.forEach((fn) => fn(batch));
+    await batch.commit();
+  }
+}
+
+async function sendMulticastChunked(tokens, payload) {
+  const uniqueTokens = [...new Set(tokens.filter(Boolean))];
+  let totalSuccess = 0;
+  for (let i = 0; i < uniqueTokens.length; i += 500) {
+    const chunk = uniqueTokens.slice(i, i + 500);
+    const res = await admin.messaging().sendEachForMulticast({
+      tokens: chunk,
+      ...payload,
+    });
+    totalSuccess += res.successCount;
+  }
+  return totalSuccess;
+}
+
+function createRazorpayOrderApi(keyId, keySecret, amountInPaise, receipt) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      amount: amountInPaise,
+      currency: "INR",
+      receipt,
+      payment_capture: 1,
+    });
+    const authHeader = "Basic " + Buffer.from(`${keyId}:${keySecret}`).toString("base64");
+    const req = https.request(
+      {
+        hostname: "api.razorpay.com",
+        path: "/v1/orders",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+          Authorization: authHeader,
+        },
+      },
+      (res) => {
+        let raw = "";
+        res.on("data", (d) => (raw += d));
+        res.on("end", () => {
+          try {
+            const parsed = JSON.parse(raw);
+            if (res.statusCode >= 200 && res.statusCode < 300 && parsed.id) {
+              resolve(parsed);
+            } else {
+              reject(new Error(parsed.error ? parsed.error.description : `Razorpay HTTP ${res.statusCode}`));
+            }
+          } catch (e) {
+            reject(e);
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
 }
 
 /**
- * 1. skipMealTicket (Callable)
- * Enforces server-side timestamp validation:
- * Calls after 21:00:00 IST return HTTP 403 / failed-precondition.
- * Enforces hard pass expiry ceiling (5/10/20 calendar days).
- * Appends replacement ticket to queue with zero bank refund friction.
+ * 1. createOrderIntent (Callable)
+ * Computes authoritative server-side totals (food + delivery fee - verified coupon),
+ * creates a Razorpay Order on the server, and stores a pending payment intent.
+ */
+exports.createOrderIntent = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError("unauthenticated", "Please sign in to place an order.");
+  }
+
+  const {
+    orderMode = "singleDay",
+    tierKey = "routine7Day",
+    kitchenId,
+    itemQuantities = {},
+    appliedCoupon,
+    clusterId = "cluster_01",
+    clusterName = "Hostel Security Gate",
+    deliverySlot = "07:30 AM – 08:00 AM",
+    deliveryInstructions = "",
+    paymentMethod = "Google Pay",
+    comboSelection = "A",
+    autoRotatePassMenu = true,
+    customerName = "Hungr Customer",
+    phoneNumber = "",
+  } = data || {};
+
+  // Fetch Razorpay server credentials from server-only /secrets/payments
+  const secretDoc = await db.collection("secrets").doc("payments").get();
+  const publicCfgDoc = await db.collection("config").doc("payments").get();
+  const razorpayKeyId =
+    (secretDoc.exists && secretDoc.data().razorpayKeyId) ||
+    (publicCfgDoc.exists && publicCfgDoc.data().razorpayKeyId) ||
+    "";
+  const razorpayKeySecret = (secretDoc.exists && secretDoc.data().razorpayKeySecret) || "";
+
+  if (!razorpayKeyId || !razorpayKeySecret) {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "PAYMENT_NOT_CONFIGURED: Razorpay server credentials are not configured yet."
+    );
+  }
+
+  // Compute server-side item prices from live Firestore catalog
+  let itemsSubtotal = 0;
+  const itemDetails = [];
+  const priceMap = {};
+  const nameMap = {};
+  let resolvedKitchenName = "Hungr Partner Kitchen";
+
+  const shopsSnap = await db.collection("tiffin_shops").get();
+  shopsSnap.forEach((doc) => {
+    const s = doc.data();
+    if (kitchenId && doc.id === kitchenId && s.name) {
+      resolvedKitchenName = s.name;
+    }
+    const dishes = s.menuItems || s.dishes || [];
+    dishes.forEach((d) => {
+      if (d && d.id) {
+        priceMap[d.id] = Number(d.price) || 49;
+        nameMap[d.id] = d.name || "Morning Tiffin";
+      }
+    });
+  });
+
+  // Fallback standard catalog prices if Firestore catalog hasn't been seeded yet
+  const fallbackCatalog = {
+    item_set_dosa: { name: "Rayalaseema Set Dosa (3 Pcs)", price: 49 },
+    item_idli_vada: { name: "Steaming Ghee Idlis (4 Pcs) + Medu Vada (1 Pc)", price: 49 },
+    item_poori_masala: { name: "Homestyle Poori Masala (3 Pcs)", price: 55 },
+    item_mysore_bonda: { name: "Crisp Mysore Bonda (4 Pcs)", price: 45 },
+    item_upma_pesarattu: { name: "MLA Pesarattu Upma", price: 55 },
+    addon_boiled_eggs: { name: "Farm Boiled Eggs (2 Pcs)", price: 20 },
+    addon_filter_coffee: { name: "Kumbakonam Degree Filter Coffee (200ml)", price: 25 },
+    addon_badam_milk: { name: "Steaming Kesari Badam Milk (200ml)", price: 25 },
+  };
+
+  for (const [id, rawQty] of Object.entries(itemQuantities || {})) {
+    const qty = Math.max(0, Math.min(20, parseInt(rawQty, 10) || 0));
+    if (qty <= 0) continue;
+    const unitPrice = priceMap[id] || (fallbackCatalog[id] && fallbackCatalog[id].price) || 49;
+    const itemName = nameMap[id] || (fallbackCatalog[id] && fallbackCatalog[id].name) || id;
+    itemsSubtotal += unitPrice * qty;
+    itemDetails.push({ id, name: itemName, price: unitPrice, qty });
+  }
+
+  let baseSubtotal = itemsSubtotal;
+  let passInfo = null;
+  if (orderMode === "subscriptionPass") {
+    passInfo = PASS_PRICES[tierKey] || PASS_PRICES.routine7Day;
+    baseSubtotal += passInfo.price;
+  } else if (itemDetails.length === 0) {
+    throw new functions.https.HttpsError("invalid-argument", "Cart is empty.");
+  }
+
+  // Unit-economics protection: ₹15 gate drop fee on single-day orders under ₹149
+  const deliveryFee = orderMode === "singleDay" && itemsSubtotal < 149 ? 15 : 0;
+
+  // Validate coupon against live Firestore offers
+  let discountAmount = 0;
+  let validCoupon = null;
+  if (appliedCoupon) {
+    const code = String(appliedCoupon).trim().toUpperCase();
+    const offersSnap = await db.collection("offers").where("code", "==", code).where("isActive", "==", true).limit(1).get();
+    let offer = null;
+    if (!offersSnap.empty) {
+      offer = offersSnap.docs[0].data();
+    } else if (code === "FIRST50") {
+      offer = { code: "FIRST50", type: "flat", value: 50, minOrder: 99 };
+    } else if (code === "HUNGRFREE") {
+      offer = { code: "HUNGRFREE", type: "flat", value: 25, minOrder: 49 };
+    }
+
+    if (offer && baseSubtotal >= (Number(offer.minOrder) || 0)) {
+      validCoupon = offer.code;
+      if (offer.type === "percentage") {
+        discountAmount = Math.min(baseSubtotal, Math.round((baseSubtotal * Number(offer.value || 0)) / 100));
+      } else {
+        discountAmount = Math.min(baseSubtotal, Number(offer.value || 0));
+      }
+    }
+  }
+
+  const totalAmount = Math.max(1, baseSubtotal + deliveryFee - discountAmount);
+  const intentRef = db.collection("payment_intents").doc();
+
+  const rzpOrder = await createRazorpayOrderApi(
+    razorpayKeyId,
+    razorpayKeySecret,
+    totalAmount * 100,
+    `hng_${intentRef.id.slice(0, 12)}`
+  );
+
+  await intentRef.set({
+    intentId: intentRef.id,
+    razorpayOrderId: rzpOrder.id,
+    userId: context.auth.uid,
+    phoneNumber: context.auth.token.phone_number || phoneNumber,
+    customerName,
+    orderMode,
+    tierKey: passInfo ? tierKey : null,
+    tier: passInfo ? passInfo.title : null,
+    days: passInfo ? passInfo.days : 1,
+    expiryDays: passInfo ? passInfo.expiryDays : 2,
+    kitchenId: kitchenId || null,
+    kitchenName: resolvedKitchenName,
+    itemQuantities,
+    itemDetails,
+    deliveryFee,
+    discountAmount,
+    appliedCoupon: validCoupon,
+    totalAmount,
+    clusterId,
+    clusterName,
+    deliverySlot,
+    deliveryInstructions,
+    paymentMethod,
+    comboSelection,
+    autoRotatePassMenu,
+    status: "PENDING",
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return {
+    intentId: intentRef.id,
+    razorpayOrderId: rzpOrder.id,
+    razorpayKeyId,
+    amountInPaise: totalAmount * 100,
+    totalAmount,
+    deliveryFee,
+    discountAmount,
+  };
+});
+
+/**
+ * 2. verifyAndCreateOrder (Callable)
+ * Verifies Razorpay HMAC-SHA256 signature and atomically creates verified order, pass, and tickets.
+ */
+exports.verifyAndCreateOrder = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError("unauthenticated", "Authentication required.");
+  }
+
+  const { intentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = data || {};
+  if (!intentId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+    throw new functions.https.HttpsError("invalid-argument", "Missing payment verification fields.");
+  }
+
+  const secretDoc = await db.collection("secrets").doc("payments").get();
+  const keySecret = secretDoc.exists ? secretDoc.data().razorpayKeySecret : null;
+  if (!keySecret) {
+    throw new functions.https.HttpsError("failed-precondition", "Payment secret missing.");
+  }
+
+  const expectedSignature = crypto
+    .createHmac("sha256", keySecret)
+    .update(`${razorpayOrderId}|${razorpayPaymentId}`)
+    .digest("hex");
+
+  if (expectedSignature !== razorpaySignature) {
+    throw new functions.https.HttpsError("permission-denied", "Invalid Razorpay payment signature.");
+  }
+
+  const intentRef = db.collection("payment_intents").doc(intentId);
+  const intentSnap = await intentRef.get();
+  if (!intentSnap.exists) {
+    throw new functions.https.HttpsError("not-found", "Payment intent not found.");
+  }
+  const intent = intentSnap.data();
+  if (intent.userId !== context.auth.uid) {
+    throw new functions.https.HttpsError("permission-denied", "Not authorized for this intent.");
+  }
+  if (intent.status === "PAID" && intent.orderId) {
+    return { success: true, orderId: intent.orderId, bagToken: intent.bagToken };
+  }
+
+  const startDate = getTargetDeliveryDateIst();
+  const prefixWords = String(intent.clusterName || "HNG")
+    .split(/\s+/)
+    .filter(Boolean);
+  const prefix =
+    prefixWords.length >= 2
+      ? (prefixWords[0][0] + prefixWords[1][0]).toUpperCase()
+      : String(intent.clusterName || "HN").slice(0, 2).toUpperCase();
+  const bagToken = `#${prefix}-${String(Math.floor(10 + Math.random() * 89))}`;
+
+  const orderRef = db.collection("orders").doc();
+  const batch = db.batch();
+
+  batch.set(orderRef, {
+    orderId: orderRef.id,
+    userId: context.auth.uid,
+    phoneNumber: intent.phoneNumber || "",
+    customerName: intent.customerName || "Hungr Customer",
+    orderMode: intent.orderMode,
+    tier: intent.tier,
+    tierKey: intent.tierKey,
+    days: intent.days,
+    kitchenId: intent.kitchenId,
+    kitchenName: intent.kitchenName,
+    items: intent.itemQuantities,
+    itemDetails: intent.itemDetails,
+    deliveryFee: intent.deliveryFee || 0,
+    discountAmount: intent.discountAmount || 0,
+    appliedCoupon: intent.appliedCoupon || null,
+    totalAmount: intent.totalAmount,
+    clusterId: intent.clusterId,
+    clusterName: intent.clusterName,
+    bagToken,
+    deliverySlot: intent.deliverySlot,
+    deliveryInstructions: intent.deliveryInstructions || "",
+    paymentMethod: intent.paymentMethod || "Razorpay UPI",
+    razorpayOrderId,
+    razorpayPaymentId,
+    status: "CONFIRMED",
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAtMs: Date.now(),
+  });
+
+  let passId = null;
+  if (intent.orderMode === "subscriptionPass" && intent.days > 0) {
+    const passRef = db.collection("passes").doc();
+    passId = passRef.id;
+    const hardExpiry = new Date(startDate.getTime() + (intent.expiryDays || intent.days + 5) * 86400000);
+    batch.set(passRef, {
+      passId,
+      orderId: orderRef.id,
+      userId: context.auth.uid,
+      phoneNumber: intent.phoneNumber || "",
+      tier: intent.tier,
+      tierKey: intent.tierKey || "routine7Day",
+      totalDays: intent.days,
+      remainingDays: intent.days,
+      clusterId: intent.clusterId,
+      clusterName: intent.clusterName,
+      bagToken,
+      comboSelection: intent.comboSelection || "A",
+      status: "ACTIVE",
+      hardExpiryDate: hardExpiry.toISOString(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAtMs: Date.now(),
+    });
+  }
+
+  const ticketCount = intent.orderMode === "subscriptionPass" ? intent.days : 1;
+  for (let i = 0; i < ticketCount; i++) {
+    const ticketRef = db.collection("meal_tickets").doc();
+    const ticketDate = new Date(startDate.getTime() + i * 86400000);
+    const ticketCombo = i === 0 ? intent.comboSelection : i % 2 === 0 ? intent.comboSelection : intent.comboSelection === "A" ? "B" : "A";
+    const summaryName =
+      intent.orderMode === "singleDay"
+        ? (intent.itemDetails || []).map((e) => `${e.qty}x ${e.name}`).join(", ")
+        : intent.autoRotatePassMenu
+        ? KHAMMAM_SPECIALTIES[i % KHAMMAM_SPECIALTIES.length]
+        : ticketCombo === "A"
+        ? "Hot Set Dosa Combo"
+        : "Steamed Idli + Vada Combo";
+
+    batch.set(ticketRef, {
+      ticketId: ticketRef.id,
+      orderId: orderRef.id,
+      passId: passId || `single_${orderRef.id}`,
+      userId: context.auth.uid,
+      phoneNumber: intent.phoneNumber || "",
+      clusterId: intent.clusterId,
+      clusterName: intent.clusterName,
+      bagToken,
+      deliveryDateIso: ticketDate.toISOString(),
+      comboSelection: ticketCombo,
+      addOns: Object.keys(intent.itemQuantities || {}),
+      specialtyName: summaryName,
+      slot: String(intent.deliverySlot || "").includes("08:00") ? "MORNING_0800" : "MORNING_0730",
+      status: "SCHEDULED",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  }
+
+  batch.update(intentRef, {
+    status: "PAID",
+    orderId: orderRef.id,
+    bagToken,
+    razorpayPaymentId,
+    paidAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await batch.commit();
+  return { success: true, orderId: orderRef.id, bagToken };
+});
+
+/**
+ * 3. skipMealTicket (Callable)
+ * Enforces 21:00 IST cutoff, pass expiry ceiling, and appends a replacement ticket atomically.
  */
 exports.skipMealTicket = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError("unauthenticated", "Must be logged in.");
   }
 
-  const { ticketId } = data;
+  const { ticketId } = data || {};
   if (!ticketId) {
     throw new functions.https.HttpsError("invalid-argument", "Missing ticketId.");
   }
 
-  // 1. Strict Server Timestamp Validation
   const istNow = getNowIst();
-  const istHours = istNow.getUTCHours();
-  const istMinutes = istNow.getUTCMinutes();
-
-  // Hard cutoff at 21:00:00 IST
-  if (istHours > 21 || (istHours === 21 && istMinutes >= 0)) {
+  if (istNow.getUTCHours() >= 21) {
     throw new functions.https.HttpsError(
       "failed-precondition",
-      "403_CUTOFF_EXCEEDED: Calls to skip meal tickets after 21:00:00 IST are strictly forbidden. Production engine is active."
+      "403_CUTOFF_EXCEEDED: Cannot pause tomorrow's meal after 9:00 PM IST."
     );
   }
 
   const ticketRef = db.collection("meal_tickets").doc(ticketId);
   const ticketDoc = await ticketRef.get();
-
   if (!ticketDoc.exists) {
     throw new functions.https.HttpsError("not-found", "Ticket does not exist.");
   }
@@ -54,51 +471,40 @@ exports.skipMealTicket = functions.https.onCall(async (data, context) => {
   if (ticket.userId !== context.auth.uid) {
     throw new functions.https.HttpsError("permission-denied", "Not your ticket.");
   }
-
   if (ticket.status !== "SCHEDULED") {
-    throw new functions.https.HttpsError(
-      "failed-precondition",
-      `Cannot skip ticket with status: ${ticket.status}`
-    );
+    throw new functions.https.HttpsError("failed-precondition", `Cannot pause ticket with status: ${ticket.status}`);
   }
 
-  // 2. Fetch Active Pass to verify Hard Expiry Ceiling
   const passDoc = await db.collection("passes").doc(ticket.passId).get();
   if (!passDoc.exists) {
-    throw new functions.https.HttpsError("not-found", "Active pass not found.");
+    throw new functions.https.HttpsError("failed-precondition", "Only multi-day Pass meals can be paused and rolled over.");
   }
   const pass = passDoc.data();
   const hardExpiryDate = new Date(pass.hardExpiryDate);
 
-  // 3. Find the tail of current user queue
   const userTicketsSnap = await db
     .collection("meal_tickets")
     .where("userId", "==", context.auth.uid)
     .where("status", "==", "SCHEDULED")
-    .orderBy("deliveryDate", "desc")
+    .orderBy("deliveryDateIso", "desc")
     .limit(1)
     .get();
 
-  let lastScheduledDate = new Date(ticket.deliveryDate);
+  let lastScheduledDate = new Date(ticket.deliveryDateIso || ticket.deliveryDate);
   if (!userTicketsSnap.empty) {
-    lastScheduledDate = new Date(userTicketsSnap.docs[0].data().deliveryDate);
+    const tail = userTicketsSnap.docs[0].data();
+    lastScheduledDate = new Date(tail.deliveryDateIso || tail.deliveryDate);
   }
 
-  // Candidate appended date = lastDate + 1 day
-  const candidateAppendDate = new Date(lastScheduledDate);
-  candidateAppendDate.setDate(candidateAppendDate.getDate() + 1);
-
-  // Check hard ceiling
+  const candidateAppendDate = new Date(lastScheduledDate.getTime() + 86400000);
   if (candidateAppendDate.getTime() > hardExpiryDate.getTime()) {
     throw new functions.https.HttpsError(
       "failed-precondition",
-      `403_CEILING_REACHED: Skipping this ticket would push delivery to ${candidateAppendDate.toDateString()}, which exceeds pass validity ceiling (${hardExpiryDate.toDateString()}).`
+      `Pass validity ceiling (${hardExpiryDate.toDateString()}) reached.`
     );
   }
 
-  // 4. Atomic Transaction: Mark skipped & append new ticket
   const newTicketRef = db.collection("meal_tickets").doc();
-
   await db.runTransaction(async (transaction) => {
     transaction.update(ticketRef, {
       status: "SKIPPED",
@@ -108,14 +514,18 @@ exports.skipMealTicket = functions.https.onCall(async (data, context) => {
 
     transaction.set(newTicketRef, {
       ticketId: newTicketRef.id,
+      orderId: ticket.orderId || null,
       passId: ticket.passId,
       userId: ticket.userId,
+      phoneNumber: ticket.phoneNumber || "",
       clusterId: ticket.clusterId,
       clusterName: ticket.clusterName,
-      deliveryDate: candidateAppendDate.toISOString(),
+      bagToken: ticket.bagToken,
+      deliveryDateIso: candidateAppendDate.toISOString(),
       comboSelection: ticket.comboSelection,
       addOns: ticket.addOns || [],
-      slot: ticket.slot || "MORNING",
+      specialtyName: ticket.specialtyName || null,
+      slot: ticket.slot || "MORNING_0730",
       status: "SCHEDULED",
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -123,239 +533,216 @@ exports.skipMealTicket = functions.https.onCall(async (data, context) => {
 
   return {
     success: true,
-    message: "Ticket skipped successfully with zero refund penalty.",
     newScheduledDate: candidateAppendDate.toISOString(),
     newTicketId: newTicketRef.id,
   };
 });
 
 /**
- * 2. autoAggregateKitchenSplit (Scheduled at 21:01 IST)
- * Runs daily at 21:01 IST (15:31 UTC).
- * Aggregates all locked tickets for tomorrow into Kitchen Unit 1 & Kitchen Unit 2 (50 capacity each).
+ * 4. autoAggregateKitchenSplit (Scheduled daily at 21:01 IST)
+ * Scales cleanly past 500+ orders using chunked 450-op Firestore batches.
  */
 exports.autoAggregateKitchenSplit = functions.pubsub
-  .schedule("31 15 * * *") // 21:01 IST daily
+  .schedule("31 15 * * *")
   .timeZone("Asia/Kolkata")
-  .onRun(async (context) => {
+  .onRun(async () => {
     const istNow = getNowIst();
-    const tomorrow = new Date(istNow);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrow = new Date(istNow.getTime() + 86400000);
     const tomorrowStr = tomorrow.toISOString().split("T")[0];
 
-    // Fetch all scheduled tickets for tomorrow
     const ticketsSnap = await db
       .collection("meal_tickets")
-      .where("deliveryDate", ">=", `${tomorrowStr}T00:00:00`)
-      .where("deliveryDate", "<=", `${tomorrowStr}T23:59:59`)
+      .where("deliveryDateIso", ">=", `${tomorrowStr}T00:00:00`)
+      .where("deliveryDateIso", "<=", `${tomorrowStr}T23:59:59`)
       .where("status", "==", "SCHEDULED")
       .get();
 
-    const tickets = [];
-    ticketsSnap.forEach((doc) => tickets.push({ id: doc.id, ...doc.data() }));
+    if (ticketsSnap.empty) return null;
 
-    let unit1Tickets = [];
-    let unit2Tickets = [];
+    const shopsSnap = await db.collection("tiffin_shops").where("status", "==", "open").get();
+    const openKitchenIds = shopsSnap.empty ? ["shop_venkateshwara", "shop_amma_chethi"] : shopsSnap.docs.map((d) => d.id);
 
-    // Distribute evenly up to 50 cap each
-    tickets.forEach((t, i) => {
-      if (i % 2 === 0 && unit1Tickets.length < 50) {
-        unit1Tickets.push(t);
-      } else if (unit2Tickets.length < 50) {
-        unit2Tickets.push(t);
-      } else {
-        unit1Tickets.push(t);
-      }
+    const ops = [];
+    const kitchenCounts = {};
+    openKitchenIds.forEach((id) => (kitchenCounts[id] = { total: 0, optionA: 0, optionB: 0 }));
+
+    ticketsSnap.docs.forEach((doc, idx) => {
+      const assignedKitchen = openKitchenIds[idx % openKitchenIds.length];
+      const combo = doc.data().comboSelection === "B" ? "B" : "A";
+      kitchenCounts[assignedKitchen].total += 1;
+      if (combo === "A") kitchenCounts[assignedKitchen].optionA += 1;
+      else kitchenCounts[assignedKitchen].optionB += 1;
+
+      ops.push((batch) =>
+        batch.update(doc.ref, {
+          status: "LOCKED",
+          assignedVendorId: assignedKitchen,
+          lockedAt: admin.firestore.FieldValue.serverTimestamp(),
+        })
+      );
     });
 
-    const batch = db.batch();
+    ops.push((batch) =>
+      batch.set(db.collection("kitchen_batches").doc(tomorrowStr), {
+        date: tomorrowStr,
+        totalUnits: ticketsSnap.size,
+        kitchenAllocation: kitchenCounts,
+        isFailoverActive: false,
+        generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      })
+    );
 
-    // Lock tickets and assign vendor IDs
-    unit1Tickets.forEach((t) => {
-      batch.update(db.collection("meal_tickets").doc(t.id), {
-        status: "LOCKED",
-        assignedVendorId: "aunty_1",
-        lockedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-    });
-
-    unit2Tickets.forEach((t) => {
-      batch.update(db.collection("meal_tickets").doc(t.id), {
-        status: "LOCKED",
-        assignedVendorId: "aunty_2",
-        lockedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-    });
-
-    // Write aggregated batch summary
-    const batchSummaryRef = db.collection("kitchen_batches").doc(tomorrowStr);
-    batch.set(batchSummaryRef, {
-      date: tomorrowStr,
-      totalUnits: tickets.length,
-      unit1: {
-        vendorId: "aunty_1",
-        total: unit1Tickets.length,
-        optionA: unit1Tickets.filter((t) => t.comboSelection === "A").length,
-        optionB: unit1Tickets.filter((t) => t.comboSelection === "B").length,
-      },
-      unit2: {
-        vendorId: "aunty_2",
-        total: unit2Tickets.length,
-        optionA: unit2Tickets.filter((t) => t.comboSelection === "A").length,
-        optionB: unit2Tickets.filter((t) => t.comboSelection === "B").length,
-      },
-      isFailoverActive: false,
-      generatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    await batch.commit();
-    console.log(`21:01 IST Split complete for ${tomorrowStr}: ${tickets.length} total units allocated.`);
+    await commitInChunks(ops, 450);
+    console.log(`21:01 IST Split complete for ${tomorrowStr}: ${ticketsSnap.size} units allocated.`);
     return null;
   });
 
 /**
- * 3. broadcastBatchArrival (Callable)
- * Dispatches concurrent Push Notifications to all recipients at a drop point
+ * 5. markTicketDelivered (Admin Callable)
+ * Marks a ticket DELIVERED, decrements Pass remainingDays, and alerts the customer.
  */
-exports.broadcastBatchArrival = functions.https.onCall(async (data, context) => {
-  const { clusterId } = data;
-  if (!clusterId) {
-    throw new functions.https.HttpsError("invalid-argument", "Missing clusterId.");
-  }
+exports.markTicketDelivered = functions.https.onCall(async (data, context) => {
+  await requireAdmin(context);
+  const { ticketId } = data || {};
+  if (!ticketId) throw new functions.https.HttpsError("invalid-argument", "Missing ticketId.");
 
-  // Fetch recipients at cluster
-  const usersSnap = await db
-    .collection("users")
-    .where("clusterId", "==", clusterId)
-    .get();
+  const ticketRef = db.collection("meal_tickets").doc(ticketId);
+  const ticketDoc = await ticketRef.get();
+  if (!ticketDoc.exists) throw new functions.https.HttpsError("not-found", "Ticket not found.");
 
-  const fcmTokens = [];
-  usersSnap.forEach((doc) => {
-    const user = doc.data();
-    if (user.fcmToken) fcmTokens.push(user.fcmToken);
+  const ticket = ticketDoc.data();
+  const deliveredIso = new Date().toISOString();
+
+  await db.runTransaction(async (tx) => {
+    tx.update(ticketRef, {
+      status: "DELIVERED",
+      deliveredAtIso: deliveredIso,
+      deliveredAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    if (ticket.passId && !String(ticket.passId).startsWith("single_")) {
+      const passRef = db.collection("passes").doc(ticket.passId);
+      const passDoc = await tx.get(passRef);
+      if (passDoc.exists) {
+        const rem = Math.max(0, (passDoc.data().remainingDays || 1) - 1);
+        tx.update(passRef, {
+          remainingDays: rem,
+          status: rem === 0 ? "COMPLETED" : "ACTIVE",
+        });
+      }
+    }
   });
 
-  if (fcmTokens.length > 0) {
-    await admin.messaging().sendMulticast({
-      tokens: fcmTokens,
+  const userDoc = await db.collection("users").doc(ticket.userId).get();
+  const token = userDoc.exists ? userDoc.data().fcmToken : null;
+  if (token) {
+    await admin.messaging().send({
+      token,
       notification: {
-        title: "Hungr Tiffin Arrived!",
-        body: "Your fresh breakfast packet has been dropped at your hostel / building gate. Please pick up within 90 mins.",
+        title: `Breakfast Dropped at Gate! (${ticket.bagToken || "Hungr"})`,
+        body: `Your morning meal is waiting at ${ticket.clusterName}. Enjoy while hot!`,
       },
-      data: {
-        type: "CLUSTER_ARRIVED",
-        clusterId: clusterId,
-      },
+      data: { route: "/tickets", actionType: "GATE_DROP_ALERT" },
     });
   }
 
-  return { success: true, count: fcmTokens.length };
+  return { success: true, deliveredAtIso: deliveredIso };
 });
 
 /**
- * 4. reassignKitchenUnitFailover (Callable - Admin only)
- * 1-Tap emergency failover switching to backup central kitchen
+ * 6. broadcastBatchArrival (Admin Callable)
  */
-exports.reassignKitchenUnitFailover = functions.https.onCall(async (data, context) => {
-  const { unitId } = data; // 'aunty_1' or 'aunty_2'
-  if (!unitId) {
-    throw new functions.https.HttpsError("invalid-argument", "Missing unitId.");
-  }
+exports.broadcastBatchArrival = functions.https.onCall(async (data, context) => {
+  await requireAdmin(context);
+  const { clusterId } = data || {};
+  if (!clusterId) throw new functions.https.HttpsError("invalid-argument", "Missing clusterId.");
 
-  const istNow = getNowIst();
-  const tomorrow = new Date(istNow);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split("T")[0];
+  const usersSnap = await db.collection("users").where("clusterId", "==", clusterId).get();
+  const fcmTokens = usersSnap.docs.map((d) => d.data().fcmToken).filter(Boolean);
 
-  const batchRef = db.collection("kitchen_batches").doc(tomorrowStr);
-  await batchRef.update({
-    isFailoverActive: true,
-    failoverUnitId: unitId,
-    backupCenterAddress: "Central Cloud Backup Hub, Mamillaguda, Khammam",
-    reroutedAt: admin.firestore.FieldValue.serverTimestamp(),
+  const sentCount = await sendMulticastChunked(fcmTokens, {
+    notification: {
+      title: "Hungr Tiffin Arrived!",
+      body: "Your fresh breakfast packet has arrived at your drop gate. Enjoy within 90 mins!",
+    },
+    data: { type: "CLUSTER_ARRIVED", clusterId },
   });
 
-  // Update tickets assigned to that vendor
+  return { success: true, count: sentCount };
+});
+
+/**
+ * 7. reassignKitchenUnitFailover (Admin Callable)
+ */
+exports.reassignKitchenUnitFailover = functions.https.onCall(async (data, context) => {
+  await requireAdmin(context);
+  const { unitId } = data || {};
+  if (!unitId) throw new functions.https.HttpsError("invalid-argument", "Missing unitId.");
+
+  const istNow = getNowIst();
+  const tomorrow = new Date(istNow.getTime() + 86400000);
+  const tomorrowStr = tomorrow.toISOString().split("T")[0];
+
   const ticketsSnap = await db
     .collection("meal_tickets")
     .where("assignedVendorId", "==", unitId)
     .where("status", "==", "LOCKED")
     .get();
 
-  const writeBatch = db.batch();
-  ticketsSnap.forEach((doc) => {
-    writeBatch.update(doc.ref, {
-      assignedVendorId: "backup_hub",
-      pickupAddress: "Central Cloud Backup Hub, Mamillaguda, Khammam",
-    });
-  });
-  await writeBatch.commit();
+  const ops = [
+    (batch) =>
+      batch.set(
+        db.collection("kitchen_batches").doc(tomorrowStr),
+        {
+          isFailoverActive: true,
+          failoverUnitId: unitId,
+          reroutedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      ),
+    ...ticketsSnap.docs.map((doc) => (batch) =>
+      batch.update(doc.ref, {
+        assignedVendorId: "backup_hub",
+      })
+    ),
+  ];
 
-  return { success: true, message: `Unit ${unitId} rerouted to backup hub.` };
+  await commitInChunks(ops, 450);
+  return { success: true, reroutedCount: ticketsSnap.size };
 });
 
 /**
- * 5. onNotificationQueueCreate (Firestore Trigger)
- * Dispatches live push notifications configured by Admin in Web Command.
- * Supports: all_users topic, custom target clusters, and deep links.
+ * 8. onNotificationQueueCreate (Firestore Trigger)
  */
 exports.onNotificationQueueCreate = functions.firestore
   .document("notifications_queue/{notificationId}")
-  .onCreate(async (snap, context) => {
+  .onCreate(async (snap) => {
     const data = snap.data();
     if (!data || data.status === "SENT") return null;
 
-    const {
-      title,
-      body,
-      imageUrl,
-      route = "/storefront",
-      audience = "all_users",
-      actionType = "GENERAL",
-    } = data;
-
+    const { title, body, imageUrl, route = "/storefront", audience = "all_users", actionType = "GENERAL" } = data;
     const payload = {
+      topic: audience || "all_users",
       notification: {
-        title: title || "Hungr Breakfast Update 🍱",
+        title: title || "Hungr Breakfast Update",
         body: body || "Fresh updates on tomorrow morning's tiffins!",
+        ...(imageUrl ? { imageUrl } : {}),
       },
       data: {
-        route: route,
-        actionType: actionType,
+        route,
+        actionType,
         click_action: "FLUTTER_NOTIFICATION_CLICK",
         timestamp: String(Date.now()),
       },
     };
 
-    if (imageUrl) {
-      payload.notification.imageUrl = imageUrl;
-    }
-
     try {
-      let response;
-      if (audience === "all_users") {
-        response = await admin.messaging().send({
-          topic: "all_users",
-          ...payload,
-        });
-        console.log("✅ [FCM] Broadcast dispatched to topic all_users:", response);
-      } else {
-        // Broadcast to specific topic
-        response = await admin.messaging().send({
-          topic: audience,
-          ...payload,
-        });
-        console.log(`✅ [FCM] Dispatched to topic ${audience}:`, response);
-      }
-
-      // Mark queue as sent
+      const response = await admin.messaging().send(payload);
       await snap.ref.update({
         status: "SENT",
         sentAt: admin.firestore.FieldValue.serverTimestamp(),
         responseMessageId: response,
       });
-
-      // Record in broadcast history
       await db.collection("notifications_history").add({
         title,
         body,
@@ -364,123 +751,133 @@ exports.onNotificationQueueCreate = functions.firestore
         sentAt: admin.firestore.FieldValue.serverTimestamp(),
       });
     } catch (err) {
-      console.error("❌ [FCM Error] Failed to dispatch push notification:", err);
-      await snap.ref.update({
-        status: "FAILED",
-        error: String(err),
-      });
+      await snap.ref.update({ status: "FAILED", error: String(err) });
     }
     return null;
   });
 
 /**
- * 6. scheduledNightlyCutoffPush (Scheduled Daily at 20:15 IST)
- * Swiggy/Zomato style behavioral urgency:
- * Sends FOMO push notification 45 mins before 9:00 PM cutoff.
+ * 9. scheduledNightlyCutoffPush (20:15 IST Daily)
  */
 exports.scheduledNightlyCutoffPush = functions.pubsub
-  .schedule("45 14 * * *") // 20:15 IST (14:45 UTC)
+  .schedule("45 14 * * *")
   .timeZone("Asia/Kolkata")
-  .onRun(async (context) => {
-    const message = {
+  .onRun(async () => {
+    await admin.messaging().send({
       topic: "daily_cutoff_reminders",
       notification: {
-        title: "45 Mins Left! ⏰ Lock Tomorrow's Breakfast",
-        body: "Slots close strictly at 9:00 PM. Book your morning tiffin pass before kitchens stop accepting orders!",
+        title: "45 Mins Left! Lock Tomorrow's Breakfast",
+        body: "Orders close at 9:00 PM tonight for tomorrow morning's 7:30 AM gate drop.",
       },
-      data: {
-        route: "/storefront",
-        actionType: "CUTOFF_URGENCY",
-      },
-    };
-
-    try {
-      await admin.messaging().send(message);
-      console.log("⏰ [FCM] 8:15 PM Nightly Cutoff Urgency Push dispatched.");
-    } catch (err) {
-      console.error("Error sending cutoff push:", err);
-    }
+      data: { route: "/storefront", actionType: "CUTOFF_URGENCY" },
+    });
     return null;
   });
 
 /**
- * 7. scheduledMorningGateDropAlert (Scheduled Daily at 07:15 AM IST)
- * Morning delight notification when drivers start gate drop runs.
+ * 10. scheduledMorningGateDropAlert (07:15 AM IST Daily)
+ * Targeted ONLY to users who actually have an active meal scheduled today (no spam).
  */
 exports.scheduledMorningGateDropAlert = functions.pubsub
-  .schedule("45 1 * * *") // 07:15 AM IST (01:45 UTC)
+  .schedule("45 1 * * *")
   .timeZone("Asia/Kolkata")
-  .onRun(async (context) => {
-    const message = {
-      topic: "morning_gate_drops",
-      notification: {
-        title: "Breakfast is at your Gate! 🍱",
-        body: "Your fresh, hot morning tiffin has arrived at the hostel watchman desk. Collect it fresh before 8:30 AM!",
-      },
-      data: {
-        route: "/tickets",
-        actionType: "GATE_DROP_ALERT",
-      },
-    };
+  .onRun(async () => {
+    const istNow = getNowIst();
+    const todayStr = istNow.toISOString().split("T")[0];
 
-    try {
-      await admin.messaging().send(message);
-      console.log("🍱 [FCM] 7:15 AM Morning Gate Drop Push dispatched.");
-    } catch (err) {
-      console.error("Error sending gate drop alert:", err);
-    }
+    const ticketsSnap = await db
+      .collection("meal_tickets")
+      .where("deliveryDateIso", ">=", `${todayStr}T00:00:00`)
+      .where("deliveryDateIso", "<=", `${todayStr}T23:59:59`)
+      .where("status", "in", ["SCHEDULED", "LOCKED"])
+      .get();
+
+    if (ticketsSnap.empty) return null;
+
+    const uids = [...new Set(ticketsSnap.docs.map((d) => d.data().userId).filter(Boolean))];
+    const userRefs = uids.map((uid) => db.collection("users").doc(uid));
+    const userDocs = userRefs.length > 0 ? await db.getAll(...userRefs) : [];
+    const tokens = userDocs.map((d) => (d.exists ? d.data().fcmToken : null)).filter(Boolean);
+
+    await sendMulticastChunked(tokens, {
+      notification: {
+        title: "Your Morning Breakfast is Out for Delivery!",
+        body: "Arriving at your gate by 7:30 AM. Check Orders for your bag token.",
+      },
+      data: { route: "/tickets", actionType: "GATE_DROP_ALERT" },
+    });
+
     return null;
   });
 
 /**
- * 8. abandonedCartEngagementNudge (Scheduled Every 30 Mins)
- * Recovers users who added breakfast to cart but didn't finish booking.
+ * 11. abandonedCartEngagementNudge (Every 30 Mins)
+ * Batch-fetches user tokens via db.getAll() (eliminates N+1 reads) and uses valid code HUNGRFREE.
  */
 exports.abandonedCartEngagementNudge = functions.pubsub
   .schedule("every 30 minutes")
-  .onRun(async (context) => {
+  .onRun(async () => {
     const twentyMinsAgo = new Date(Date.now() - 20 * 60 * 1000);
-
     const snapshot = await db
       .collection("abandoned_carts")
       .where("status", "==", "in_cart")
       .where("reminded", "==", false)
       .where("updatedAt", "<=", twentyMinsAgo)
-      .limit(50)
+      .limit(100)
       .get();
 
     if (snapshot.empty) return null;
 
-    console.log(`🛒 Found ${snapshot.size} abandoned carts to nudge.`);
+    const userIds = [...new Set(snapshot.docs.map((d) => d.data().userId).filter(Boolean))];
+    const userDocs = userIds.length > 0 ? await db.getAll(...userIds.map((u) => db.collection("users").doc(u))) : [];
+    const tokenByUid = {};
+    userDocs.forEach((doc) => {
+      if (doc.exists && doc.data().fcmToken) tokenByUid[doc.id] = doc.data().fcmToken;
+    });
 
-    const batch = db.batch();
+    const tokens = [];
+    const ops = [];
+    snapshot.docs.forEach((doc) => {
+      const uid = doc.data().userId;
+      if (uid && tokenByUid[uid]) tokens.push(tokenByUid[uid]);
+      ops.push((batch) =>
+        batch.update(doc.ref, {
+          reminded: true,
+          remindedAt: admin.firestore.FieldValue.serverTimestamp(),
+        })
+      );
+    });
 
-    for (const doc of snapshot.docs) {
-      const data = doc.data();
-      const userDoc = data.userId ? await db.collection("users").doc(data.userId).get() : null;
-      const fcmToken = userDoc && userDoc.exists ? userDoc.data().fcmToken : null;
-
-      if (fcmToken) {
-        try {
-          await admin.messaging().send({
-            token: fcmToken,
-            notification: {
-              title: "Hot Breakfast Waiting in Your Cart! 🤤",
-              body: "Don't miss out on tomorrow's fresh tiffins. Tap to complete your order with flat ₹20 off using HUNGR20!",
-            },
-            data: {
-              route: "/storefront/checkout",
-              actionType: "ABANDONED_CART_RECOVERY",
-            },
-          });
-        } catch (e) {
-          console.warn("Failed sending push to token:", e);
-        }
-      }
-
-      batch.update(doc.ref, { reminded: true, remindedAt: admin.firestore.FieldValue.serverTimestamp() });
+    if (tokens.length > 0) {
+      await sendMulticastChunked(tokens, {
+        notification: {
+          title: "Hot Breakfast Waiting in Your Cart!",
+          body: "Complete your morning tiffin order before 9:00 PM & save ₹25 with code HUNGRFREE!",
+        },
+        data: { route: "/storefront/checkout", actionType: "ABANDONED_CART_RECOVERY" },
+      });
     }
 
-    await batch.commit();
+    await commitInChunks(ops, 450);
     return null;
   });
+
+/**
+ * 12. deleteMyAccountData (Callable)
+ * Purges user profile, abandoned carts, and FCM tokens on account deletion.
+ */
+exports.deleteMyAccountData = functions.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Authentication required.");
+  const uid = context.auth.uid;
+
+  const ops = [(batch) => batch.delete(db.collection("users").doc(uid))];
+
+  const cartsSnap = await db.collection("abandoned_carts").where("userId", "==", uid).get();
+  cartsSnap.docs.forEach((d) => ops.push((batch) => batch.delete(d.ref)));
+
+  const tokensSnap = await db.collection("fcm_tokens").where("userId", "==", uid).get();
+  tokensSnap.docs.forEach((d) => ops.push((batch) => batch.delete(d.ref)));
+
+  await commitInChunks(ops, 450);
+  return { success: true };
+});

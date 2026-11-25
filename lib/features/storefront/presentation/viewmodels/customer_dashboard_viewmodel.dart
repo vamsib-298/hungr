@@ -292,22 +292,24 @@ class CustomerDashboardViewModel extends StateNotifier<CustomerDashboardState> {
     );
   }
 
+  /// Server-verified pause & rollover via `skipMealTicket` Cloud Function
+  Future<String?> pauseTicketWithServer(String ticketId) async {
+    try {
+      await FirebaseService.instance.callSkipMealTicket(ticketId);
+      return null;
+    } catch (e) {
+      return e.toString().replaceAll('Exception: ', '');
+    }
+  }
+
   bool togglePauseTicket(String ticketId) {
     final index = state.tickets.indexWhere((t) => t.ticketId == ticketId);
     if (index == -1) return false;
 
-    final updatedTickets = List<MealTicket>.from(state.tickets);
-    final target = updatedTickets[index];
-
+    final target = state.tickets[index];
     if (target.status == TicketStatusType.scheduled) {
-      updatedTickets[index] = target.copyWith(status: TicketStatusType.skipped);
-      FirebaseService.instance.updateTicketStatus(ticketId: ticketId, status: 'SKIPPED');
-    } else if (target.status == TicketStatusType.skipped) {
-      updatedTickets[index] = target.copyWith(status: TicketStatusType.scheduled);
-      FirebaseService.instance.updateTicketStatus(ticketId: ticketId, status: 'SCHEDULED');
+      pauseTicketWithServer(ticketId);
     }
-
-    state = state.copyWith(tickets: updatedTickets);
     return true;
   }
 
