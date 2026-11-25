@@ -367,41 +367,9 @@ class _ReferralViralSheetState extends ConsumerState<ReferralViralSheet> {
                   const SizedBox(height: 20),
 
                   // Friends Activity Feed
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Friends Invited (${referralState.friends.length})',
-                        style: AppTypography.titleSmall.copyWith(fontWeight: FontWeight.w700, color: AppColors.textPrimary),
-                      ),
-                      // Interactive Demo Button for instant testing
-                      InkWell(
-                        onTap: () {
-                          ref.read(referralProvider.notifier).simulateFriendFirstOrder();
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: AppColors.zomatoRedSurface,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.check_circle_outline, color: AppColors.zomatoRed, size: 12),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Simulate 1st Order (+1)',
-                                style: AppTypography.caption.copyWith(
-                                  color: AppColors.zomatoRed,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 10,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
+                  Text(
+                    'Friends Invited (${referralState.friends.length})',
+                    style: AppTypography.titleSmall.copyWith(fontWeight: FontWeight.w700, color: AppColors.textPrimary),
                   ),
                   const SizedBox(height: 10),
 

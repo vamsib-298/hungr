@@ -119,6 +119,20 @@ class FirebaseService {
     return userCredential;
   }
 
+  /// Delete user account & Firestore profile (Google Play / DPDP compliance)
+  Future<void> deleteUserAccount() async {
+    try {
+      final user = currentUser;
+      if (user != null) {
+        await firestore.collection('users').doc(user.uid).delete();
+        await user.delete();
+      }
+    } catch (e) {
+      debugPrint('⚠️ [FirebaseService] Delete account notice: $e');
+      rethrow;
+    }
+  }
+
   /// Sign out current user
   Future<void> signOut() async {
     try {
@@ -293,79 +307,136 @@ class FirebaseService {
   }
 
   // ==========================================
-  // 5. LIVE ORDERS & MEAL TICKETS LEDGER
+  // 5. LIVE ORDERS, PASSES & MEAL TICKETS LEDGER
   // ==========================================
 
-  /// Records live order and pass purchase to Cloud Firestore (zero dummy data)
+  /// Records live order, pass (if subscription), and meal tickets to Cloud Firestore
   Future<String> recordOrder({
     required String userId,
+    required String phoneNumber,
+    required String customerName,
     required String orderMode, // 'singleDay' or 'subscriptionPass'
     String? tier,
+    String? tierKey,
     int? days,
+    String? kitchenId,
+    String? kitchenName,
     required Map<String, int> itemQuantities,
+    required List<Map<String, dynamic>> itemDetails,
     required int totalAmount,
     int discountAmount = 0,
     String? appliedCoupon,
+    required String clusterId,
     required String clusterName,
     required String bagToken,
     required String deliveryDate,
+    required DateTime startDate,
+    String deliverySlot = '07:30 AM – 08:00 AM',
+    String paymentMethod = 'Google Pay',
+    String deliveryInstructions = '',
+    String comboSelection = 'A',
+    int companionMeals = 0,
+    List<String> specialtyNames = const [],
   }) async {
     try {
+      final effectiveUid = currentUser?.uid ?? userId;
+      final batch = firestore.batch();
       final orderRef = firestore.collection('orders').doc();
+
       final orderData = {
         'orderId': orderRef.id,
-        'userId': userId,
-        'userUid': currentUser?.uid,
+        'userId': effectiveUid,
+        'phoneNumber': phoneNumber,
+        'customerName': customerName,
         'orderMode': orderMode,
         'tier': tier,
-        'days': days,
+        'tierKey': tierKey,
+        'days': days ?? 1,
+        'kitchenId': kitchenId,
+        'kitchenName': kitchenName ?? 'Hungr Partner Kitchen',
         'items': itemQuantities,
+        'itemDetails': itemDetails,
         'totalAmount': totalAmount,
         'discountAmount': discountAmount,
         'appliedCoupon': appliedCoupon,
+        'clusterId': clusterId,
         'clusterName': clusterName,
         'bagToken': bagToken,
         'deliveryDate': deliveryDate,
+        'deliverySlot': deliverySlot,
+        'paymentMethod': paymentMethod,
+        'deliveryInstructions': deliveryInstructions,
+        'comboSelection': comboSelection,
+        'companionMeals': companionMeals,
         'status': 'CONFIRMED',
         'createdAt': FieldValue.serverTimestamp(),
+        'createdAtMs': DateTime.now().millisecondsSinceEpoch,
       };
+      batch.set(orderRef, orderData);
 
-      await orderRef.set(orderData);
-
-      // If subscription pass, record into passes collection
-      if (orderMode == 'subscriptionPass' && days != null) {
+      String? passId;
+      if (orderMode == 'subscriptionPass' && days != null && days > 0) {
         final passRef = firestore.collection('passes').doc();
-        await passRef.set({
-          'passId': passRef.id,
+        passId = passRef.id;
+        final hardExpiry = startDate.add(Duration(days: days + 5));
+        batch.set(passRef, {
+          'passId': passId,
           'orderId': orderRef.id,
-          'userId': currentUser?.uid ?? userId,
+          'userId': effectiveUid,
+          'phoneNumber': phoneNumber,
           'tier': tier,
+          'tierKey': tierKey ?? 'routine7Day',
           'totalDays': days,
           'remainingDays': days,
+          'clusterId': clusterId,
           'clusterName': clusterName,
           'bagToken': bagToken,
+          'comboSelection': comboSelection,
           'status': 'ACTIVE',
           'startDate': deliveryDate,
+          'hardExpiryDate': hardExpiry.toIso8601String(),
+          'createdAt': FieldValue.serverTimestamp(),
+          'createdAtMs': DateTime.now().millisecondsSinceEpoch,
+        });
+      }
+
+      // Create 1 ticket for single-day order or `days` tickets for pass
+      final int ticketCount = (orderMode == 'subscriptionPass' && days != null && days > 0) ? days : 1;
+      for (int i = 0; i < ticketCount; i++) {
+        final ticketRef = firestore.collection('meal_tickets').doc();
+        final ticketDate = startDate.add(Duration(days: i));
+        final ticketCombo = i == 0 ? comboSelection : (i % 2 == 0 ? comboSelection : (comboSelection == 'A' ? 'B' : 'A'));
+        final summaryName = orderMode == 'singleDay'
+            ? (itemDetails.isNotEmpty
+                ? itemDetails.map((e) => '${e['qty']}x ${e['name']}').join(', ')
+                : 'Morning Tiffin')
+            : (specialtyNames.isNotEmpty
+                ? specialtyNames[i % specialtyNames.length]
+                : (ticketCombo == 'A' ? 'Hot Set Dosa Combo' : 'Steamed Idli + Vada Combo'));
+
+        batch.set(ticketRef, {
+          'ticketId': ticketRef.id,
+          'orderId': orderRef.id,
+          'passId': passId ?? 'single_${orderRef.id}',
+          'userId': effectiveUid,
+          'phoneNumber': phoneNumber,
+          'clusterId': clusterId,
+          'clusterName': clusterName,
+          'bagToken': bagToken,
+          'deliveryDateIso': ticketDate.toIso8601String(),
+          'deliveryDate': deliveryDate,
+          'comboSelection': ticketCombo,
+          'addOns': itemQuantities.keys.toList(),
+          'specialtyName': summaryName,
+          'companionMeals': i == 0 ? companionMeals : 0,
+          'slot': deliverySlot.contains('08:00') ? 'MORNING_0800' : 'MORNING_0730',
+          'status': 'SCHEDULED',
           'createdAt': FieldValue.serverTimestamp(),
         });
       }
 
-      // Record tomorrow's morning meal ticket
-      final ticketRef = firestore.collection('meal_tickets').doc();
-      await ticketRef.set({
-        'ticketId': ticketRef.id,
-        'orderId': orderRef.id,
-        'userId': currentUser?.uid ?? userId,
-        'clusterName': clusterName,
-        'bagToken': bagToken,
-        'deliveryDate': deliveryDate,
-        'comboSelection': 'A',
-        'slot': 'MORNING_0730',
-        'status': 'SCHEDULED',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      debugPrint('🎉 [Order Recorded] Live order ${orderRef.id} and ticket stored in Cloud Firestore');
+      await batch.commit();
+      debugPrint('🎉 [Order Recorded] Live order ${orderRef.id} ($ticketCount ticket(s)) committed to Firestore');
       return orderRef.id;
     } catch (e) {
       debugPrint('⚠️ [Record order error]: $e');
@@ -373,21 +444,147 @@ class FirebaseService {
     }
   }
 
-  /// Real-time stream of user orders
-  Stream<List<Map<String, dynamic>>> streamUserOrders(String userId) {
+  /// Real-time stream of user orders (sorted in Dart to avoid composite index dependency)
+  Stream<List<Map<String, dynamic>>> streamUserOrders(String uid) {
     try {
       return firestore
           .collection('orders')
-          .where('userId', isEqualTo: userId)
-          .orderBy('createdAt', descending: true)
+          .where('userId', isEqualTo: uid)
           .snapshots()
-          .map((snap) => snap.docs.map((d) => d.data()).toList())
+          .map((snap) {
+            final list = snap.docs.map((d) => d.data()).toList();
+            list.sort((a, b) {
+              final aMs = (a['createdAtMs'] as num?)?.toInt() ?? 0;
+              final bMs = (b['createdAtMs'] as num?)?.toInt() ?? 0;
+              return bMs.compareTo(aMs);
+            });
+            return list;
+          })
           .handleError((e) {
-        debugPrint('⚠️ [Orders stream notice]: $e');
-        return <Map<String, dynamic>>[];
-      });
+            debugPrint('⚠️ [Orders stream notice]: $e');
+            return <Map<String, dynamic>>[];
+          });
     } catch (e) {
       return Stream.value(<Map<String, dynamic>>[]);
+    }
+  }
+
+  /// Real-time stream of user meal tickets
+  Stream<List<Map<String, dynamic>>> streamUserTickets(String uid) {
+    try {
+      return firestore
+          .collection('meal_tickets')
+          .where('userId', isEqualTo: uid)
+          .snapshots()
+          .map((snap) {
+            final list = snap.docs.map((d) => d.data()).toList();
+            list.sort((a, b) {
+              final aIso = (a['deliveryDateIso'] as String?) ?? '';
+              final bIso = (b['deliveryDateIso'] as String?) ?? '';
+              return aIso.compareTo(bIso);
+            });
+            return list;
+          })
+          .handleError((e) {
+            debugPrint('⚠️ [Tickets stream notice]: $e');
+            return <Map<String, dynamic>>[];
+          });
+    } catch (e) {
+      return Stream.value(<Map<String, dynamic>>[]);
+    }
+  }
+
+  /// Real-time stream of user passes
+  Stream<List<Map<String, dynamic>>> streamUserPasses(String uid) {
+    try {
+      return firestore
+          .collection('passes')
+          .where('userId', isEqualTo: uid)
+          .snapshots()
+          .map((snap) {
+            final list = snap.docs.map((d) => d.data()).toList();
+            list.sort((a, b) {
+              final aMs = (a['createdAtMs'] as num?)?.toInt() ?? 0;
+              final bMs = (b['createdAtMs'] as num?)?.toInt() ?? 0;
+              return bMs.compareTo(aMs);
+            });
+            return list;
+          })
+          .handleError((e) {
+            debugPrint('⚠️ [Passes stream notice]: $e');
+            return <Map<String, dynamic>>[];
+          });
+    } catch (e) {
+      return Stream.value(<Map<String, dynamic>>[]);
+    }
+  }
+
+  /// Update ticket status (pause/resume) in Firestore
+  Future<void> updateTicketStatus({
+    required String ticketId,
+    required String status, // 'SCHEDULED' or 'SKIPPED'
+  }) async {
+    try {
+      await firestore.collection('meal_tickets').doc(ticketId).update({
+        'status': status,
+      });
+    } catch (e) {
+      debugPrint('⚠️ [Update ticket status notice]: $e');
+    }
+  }
+
+  /// Update ticket combo selection in Firestore
+  Future<void> updateTicketCombo({
+    required String ticketId,
+    required String comboSelection,
+  }) async {
+    try {
+      await firestore.collection('meal_tickets').doc(ticketId).update({
+        'comboSelection': comboSelection,
+      });
+    } catch (e) {
+      debugPrint('⚠️ [Update ticket combo notice]: $e');
+    }
+  }
+
+  /// Stream delivery clusters from Firestore (falls back cleanly if empty)
+  Stream<List<Map<String, dynamic>>> streamClusters() {
+    try {
+      return firestore
+          .collection('clusters')
+          .snapshots()
+          .map((snap) => snap.docs.map((d) => {'id': d.id, ...d.data()}).toList())
+          .handleError((_) => <Map<String, dynamic>>[]);
+    } catch (_) {
+      return Stream.value(<Map<String, dynamic>>[]);
+    }
+  }
+
+  /// Fetch real user referral data from Firestore
+  Future<Map<String, dynamic>> fetchUserReferralData(String uid) async {
+    try {
+      final doc = await firestore.collection('users').doc(uid).get();
+      final data = doc.data() ?? {};
+      final code = data['referralCode'] as String? ??
+          'HUNGR-${uid.substring(0, uid.length >= 4 ? 4 : uid.length).toUpperCase()}';
+      if (data['referralCode'] == null) {
+        await firestore.collection('users').doc(uid).set({
+          'referralCode': code,
+        }, SetOptions(merge: true));
+      }
+      return {
+        'referralCode': code,
+        'qualifiedOrderCount': (data['referralQualifiedCount'] as num?)?.toInt() ?? 0,
+        'isRewardClaimed': data['referralRewardClaimed'] as bool? ?? false,
+        'friends': (data['referredFriends'] as List<dynamic>?) ?? <dynamic>[],
+      };
+    } catch (_) {
+      return {
+        'referralCode': 'HUNGR-NEW',
+        'qualifiedOrderCount': 0,
+        'isRewardClaimed': false,
+        'friends': <dynamic>[],
+      };
     }
   }
 }

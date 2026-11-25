@@ -143,20 +143,31 @@ class TiffinShop {
       }
     }
 
+    final resolvedId = docId ?? map['id'] as String? ?? 'shop_${DateTime.now().millisecondsSinceEpoch}';
+    final resolvedName = map['name'] as String? ?? 'Khammam Tiffin Hub';
+
     List<TiffinItem> items = [];
     if (map['menuItems'] is List) {
       items = (map['menuItems'] as List)
-          .map((e) => TiffinItem.fromMap(Map<String, dynamic>.from(e as Map)))
+          .map((e) => TiffinItem.fromMap(
+                Map<String, dynamic>.from(e as Map),
+                shopId: resolvedId,
+                shopName: resolvedName,
+              ))
           .toList();
     } else if (map['dishes'] is List) {
       items = (map['dishes'] as List)
-          .map((e) => TiffinItem.fromMap(Map<String, dynamic>.from(e as Map)))
+          .map((e) => TiffinItem.fromMap(
+                Map<String, dynamic>.from(e as Map),
+                shopId: resolvedId,
+                shopName: resolvedName,
+              ))
           .toList();
     }
 
     return TiffinShop(
-      id: docId ?? map['id'] as String? ?? 'shop_${DateTime.now().millisecondsSinceEpoch}',
-      name: map['name'] as String? ?? 'Khammam Tiffin Hub',
+      id: resolvedId,
+      name: resolvedName,
       tagline: map['tagline'] as String? ?? 'Hot fresh morning breakfast delivered to gate',
       zone: map['zone'] as String? ?? 'Khammam Central',
       address: map['address'] as String? ?? 'Khammam, Telangana',
@@ -171,13 +182,18 @@ class TiffinShop {
       status: parseStatus(map['status'] as String?),
       closureReason: map['closureReason'] as String?,
       reopenDate: map['reopenDate'] as String?,
-      menuItems: items.isNotEmpty ? items : TiffinItem.standardMenuItems.take(4).toList(),
+      menuItems: items.isNotEmpty
+          ? items
+          : TiffinItem.standardMenuItems
+              .take(4)
+              .map((e) => e.copyWith(shopId: resolvedId, shopName: resolvedName))
+              .toList(),
       isPromoted: map['isPromoted'] as bool? ?? false,
       discountLabel: map['discountLabel'] as String?,
     );
   }
 
-  /// Default Khammam partner kitchens
+  /// Default Khammam partner kitchens (fallback before Firestore connects)
   static List<TiffinShop> get standardShops => [
     TiffinShop(
       id: 'shop_venkateshwara',
@@ -189,19 +205,19 @@ class TiffinShop {
       totalReviews: 2450,
       deliveryWindow: 'Drop at gate by 7:30 AM',
       isPureVeg: true,
-      carouselImages: [
+      carouselImages: const [
         'https://images.unsplash.com/photo-1668236543090-82eba5ee5976?w=800&auto=format&fit=crop&q=80',
         'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?w=800&auto=format&fit=crop&q=80',
         'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=800&auto=format&fit=crop&q=80',
         'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=800&auto=format&fit=crop&q=80',
       ],
-      specialties: ['Ghee Thatte Idli', 'Rayalaseema Karam Dosa', 'Piping Sambar'],
+      specialties: const ['Ghee Thatte Idli', 'Rayalaseema Karam Dosa', 'Piping Sambar'],
       status: ShopStatus.open,
       menuItems: [
-        TiffinItem.standardMenuItems[0], // Set Dosa
-        TiffinItem.standardMenuItems[1], // Idli Vada
-        TiffinItem.standardMenuItems[3], // Mysore Bonda
-        TiffinItem.standardMenuItems[6], // Filter Coffee
+        TiffinItem.standardMenuItems[0].copyWith(shopId: 'shop_venkateshwara', shopName: 'Sri Venkateshwara Tiffin Hub'),
+        TiffinItem.standardMenuItems[1].copyWith(shopId: 'shop_venkateshwara', shopName: 'Sri Venkateshwara Tiffin Hub'),
+        TiffinItem.standardMenuItems[3].copyWith(shopId: 'shop_venkateshwara', shopName: 'Sri Venkateshwara Tiffin Hub'),
+        TiffinItem.standardMenuItems[6].copyWith(shopId: 'shop_venkateshwara', shopName: 'Sri Venkateshwara Tiffin Hub'),
       ],
       isPromoted: true,
       discountLabel: 'FLAT ₹20 OFF • BESTSELLER',
@@ -215,23 +231,23 @@ class TiffinShop {
       rating: 4.9,
       totalReviews: 3120,
       deliveryWindow: 'Drop at gate by 7:30 AM',
-      isPureVeg: true,
-      carouselImages: [
+      isPureVeg: false,
+      carouselImages: const [
         'https://images.unsplash.com/photo-1626777552726-4a6b54c97e46?w=800&auto=format&fit=crop&q=80',
         'https://images.unsplash.com/photo-1610192244261-3f33de3f55e4?w=800&auto=format&fit=crop&q=80',
         'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?w=800&auto=format&fit=crop&q=80',
         'https://images.unsplash.com/photo-1544787219-7f47ccb76574?w=800&auto=format&fit=crop&q=80',
       ],
-      specialties: ['MLA Pesarattu Upma', 'Fluffy Poori Kurma', 'Allam Chutney'],
+      specialties: const ['MLA Pesarattu Upma', 'Fluffy Poori Kurma', 'Allam Chutney'],
       status: ShopStatus.open,
       menuItems: [
-        TiffinItem.standardMenuItems[2], // Poori Masala
-        TiffinItem.standardMenuItems[4], // MLA Pesarattu Upma
-        TiffinItem.standardMenuItems[5], // Boiled Eggs
-        TiffinItem.standardMenuItems[7], // Kesari Badam Milk
+        TiffinItem.standardMenuItems[2].copyWith(shopId: 'shop_amma_chethi', shopName: 'Amma Chethi Vanta'),
+        TiffinItem.standardMenuItems[4].copyWith(shopId: 'shop_amma_chethi', shopName: 'Amma Chethi Vanta'),
+        TiffinItem.standardMenuItems[5].copyWith(shopId: 'shop_amma_chethi', shopName: 'Amma Chethi Vanta'),
+        TiffinItem.standardMenuItems[7].copyWith(shopId: 'shop_amma_chethi', shopName: 'Amma Chethi Vanta'),
       ],
       isPromoted: true,
-      discountLabel: 'CHEFS RECOMMENDATION',
+      discountLabel: 'CHEF RECOMMENDATION',
     ),
     TiffinShop(
       id: 'shop_bala_corner',
@@ -243,19 +259,17 @@ class TiffinShop {
       totalReviews: 1890,
       deliveryWindow: 'Drop at gate by 7:30 AM',
       isPureVeg: true,
-      carouselImages: [
+      carouselImages: const [
         'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=800&auto=format&fit=crop&q=80',
         'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?w=800&auto=format&fit=crop&q=80',
         'https://images.unsplash.com/photo-1668236543090-82eba5ee5976?w=800&auto=format&fit=crop&q=80',
       ],
-      specialties: ['Crisp Mysore Bonda', 'Medu Vada with Coconut Chutney'],
-      status: ShopStatus.closedToday,
-      closureReason: 'Kitchen equipment maintenance today',
-      reopenDate: 'Tomorrow at 6:00 AM',
+      specialties: const ['Crisp Mysore Bonda', 'Medu Vada with Coconut Chutney'],
+      status: ShopStatus.open,
       menuItems: [
-        TiffinItem.standardMenuItems[1],
-        TiffinItem.standardMenuItems[3],
-        TiffinItem.standardMenuItems[6],
+        TiffinItem.standardMenuItems[1].copyWith(shopId: 'shop_bala_corner', shopName: 'Bala Tiffin Corner'),
+        TiffinItem.standardMenuItems[3].copyWith(shopId: 'shop_bala_corner', shopName: 'Bala Tiffin Corner'),
+        TiffinItem.standardMenuItems[6].copyWith(shopId: 'shop_bala_corner', shopName: 'Bala Tiffin Corner'),
       ],
       discountLabel: 'LOCAL FAVORITE',
     ),
@@ -269,19 +283,19 @@ class TiffinShop {
       totalReviews: 980,
       deliveryWindow: 'Drop at gate by 7:30 AM',
       isPureVeg: true,
-      carouselImages: [
+      carouselImages: const [
         'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?w=800&auto=format&fit=crop&q=80',
         'https://images.unsplash.com/photo-1668236543090-82eba5ee5976?w=800&auto=format&fit=crop&q=80',
         'https://images.unsplash.com/photo-1544787219-7f47ccb76574?w=800&auto=format&fit=crop&q=80',
       ],
-      specialties: ['Udupi Thatte Idli', 'Filter Coffee', 'Crisp Vada'],
+      specialties: const ['Udupi Thatte Idli', 'Filter Coffee', 'Crisp Vada'],
       status: ShopStatus.closedTemporary,
-      closureReason: 'Closed for 2 days due to family temple festival',
-      reopenDate: 'Reopens Thursday, 14 Nov',
+      closureReason: 'Closed briefly for kitchen deep-cleaning',
+      reopenDate: 'Reopening tomorrow morning',
       menuItems: [
-        TiffinItem.standardMenuItems[0],
-        TiffinItem.standardMenuItems[1],
-        TiffinItem.standardMenuItems[7],
+        TiffinItem.standardMenuItems[0].copyWith(shopId: 'shop_sai_udupi', shopName: 'Sri Sai Udupi Upahar'),
+        TiffinItem.standardMenuItems[1].copyWith(shopId: 'shop_sai_udupi', shopName: 'Sri Sai Udupi Upahar'),
+        TiffinItem.standardMenuItems[7].copyWith(shopId: 'shop_sai_udupi', shopName: 'Sri Sai Udupi Upahar'),
       ],
     ),
   ];

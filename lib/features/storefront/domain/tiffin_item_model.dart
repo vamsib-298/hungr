@@ -12,6 +12,9 @@ class TiffinItem {
   final String? icon;
   final String? imageRef;
   final String category;
+  final bool isAvailable;
+  final String? shopId;
+  final String? shopName;
 
   const TiffinItem({
     required this.id,
@@ -26,6 +29,9 @@ class TiffinItem {
     this.icon,
     this.imageRef,
     required this.category,
+    this.isAvailable = true,
+    this.shopId,
+    this.shopName,
   });
 
   /// Category constants
@@ -62,6 +68,9 @@ class TiffinItem {
     String? icon,
     String? imageRef,
     String? category,
+    bool? isAvailable,
+    String? shopId,
+    String? shopName,
   }) {
     return TiffinItem(
       id: id ?? this.id,
@@ -76,6 +85,9 @@ class TiffinItem {
       icon: icon ?? this.icon,
       imageRef: imageRef ?? this.imageRef,
       category: category ?? this.category,
+      isAvailable: isAvailable ?? this.isAvailable,
+      shopId: shopId ?? this.shopId,
+      shopName: shopName ?? this.shopName,
     );
   }
 
@@ -93,23 +105,62 @@ class TiffinItem {
       'icon': icon,
       'imageRef': imageRef,
       'category': category,
+      'isAvailable': isAvailable,
     };
   }
 
-  factory TiffinItem.fromMap(Map<String, dynamic> map) {
+  /// Null-safe parser supporting both rich item payloads and minimal web_admin dish objects
+  factory TiffinItem.fromMap(
+    Map<String, dynamic> map, {
+    String? shopId,
+    String? shopName,
+  }) {
+    final id = (map['id'] as String?)?.trim().isNotEmpty == true
+        ? (map['id'] as String).trim()
+        : 'dish_${DateTime.now().millisecondsSinceEpoch}';
+    final template = findById(id);
+    final rawName = (map['name'] as String?)?.trim() ?? template?.name ?? 'Fresh Morning Tiffin';
+    final lowerName = rawName.toLowerCase();
+    final price = (map['price'] as num?)?.toInt() ?? template?.price ?? 49;
+    final originalPrice = (map['originalPrice'] as num?)?.toInt() ??
+        template?.originalPrice ??
+        (price + 15);
+
+    String inferredCategory = template?.category ?? categoryDailyBreakfast;
+    if (map['category'] is String && (map['category'] as String).isNotEmpty) {
+      inferredCategory = map['category'] as String;
+    } else if (lowerName.contains('coffee') || lowerName.contains('milk') || lowerName.contains('tea') || lowerName.contains('chai')) {
+      inferredCategory = categoryBeverages;
+    } else if (lowerName.contains('egg')) {
+      inferredCategory = categoryMorningAddons;
+    }
+
+    final bool inferredVeg = map['isVeg'] as bool? ??
+        template?.isVeg ??
+        (!lowerName.contains('egg') && !lowerName.contains('chicken') && !lowerName.contains('non-veg'));
+
     return TiffinItem(
-      id: map['id'] as String,
-      name: map['name'] as String,
-      description: map['description'] as String,
-      price: (map['price'] as num).toInt(),
-      originalPrice: (map['originalPrice'] as num).toInt(),
-      calories: (map['calories'] as num).toInt(),
-      proteinGrams: (map['proteinGrams'] as num).toDouble(),
-      isVeg: map['isVeg'] as bool,
-      tag: map['tag'] as String,
-      icon: map['icon'] as String?,
-      imageRef: map['imageRef'] as String?,
-      category: map['category'] as String,
+      id: id,
+      name: rawName,
+      description: (map['description'] as String?)?.trim().isNotEmpty == true
+          ? map['description'] as String
+          : (template?.description ?? 'Prepared fresh every morning with traditional chutneys and piping sambar'),
+      price: price,
+      originalPrice: originalPrice > price ? originalPrice : price + 10,
+      calories: (map['calories'] as num?)?.toInt() ?? template?.calories ?? 310,
+      proteinGrams: (map['proteinGrams'] as num?)?.toDouble() ?? template?.proteinGrams ?? 8.0,
+      isVeg: inferredVeg,
+      tag: (map['tag'] as String?)?.trim().isNotEmpty == true
+          ? map['tag'] as String
+          : (template?.tag ?? tagPopular),
+      icon: map['icon'] as String? ?? template?.icon,
+      imageRef: (map['imageRef'] as String?)?.trim().isNotEmpty == true
+          ? map['imageRef'] as String
+          : template?.imageRef,
+      category: inferredCategory,
+      isAvailable: map['isAvailable'] as bool? ?? true,
+      shopId: shopId ?? map['shopId'] as String?,
+      shopName: shopName ?? map['shopName'] as String?,
     );
   }
 

@@ -1,5 +1,7 @@
+import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/constants/business_rules.dart';
+import '../../../../core/services/firebase_service.dart';
 import '../../../../core/services/local_storage_service.dart';
 import '../../../../core/utils/date_time_utils.dart';
 import '../../../onboarding/domain/cluster_model.dart';
@@ -29,6 +31,18 @@ class CustomerDashboardState {
     required this.isRenewAlertActive,
   });
 
+  bool get hasUpcomingMeal =>
+      tickets.any((t) => t.status == TicketStatusType.scheduled || t.status == TicketStatusType.delivered);
+
+  MealTicket? get nextScheduledTicket {
+    for (final t in tickets) {
+      if (t.status == TicketStatusType.scheduled || t.status == TicketStatusType.delivered) {
+        return t;
+      }
+    }
+    return tickets.isNotEmpty ? tickets.first : null;
+  }
+
   CustomerDashboardState copyWith({
     bool? hasActivePass,
     PassTierType? activeTier,
@@ -55,30 +69,110 @@ class CustomerDashboardState {
 }
 
 class CustomerDashboardViewModel extends StateNotifier<CustomerDashboardState> {
+  StreamSubscription<User?>? _authSub;
+  StreamSubscription<List<Map<String, dynamic>>>? _passesSub;
+  StreamSubscription<List<Map<String, dynamic>>>? _ticketsSub;
+
   CustomerDashboardViewModel()
       : super(
-          CustomerDashboardState(
-            hasActivePass: true,
+          const CustomerDashboardState(
+            hasActivePass: false,
             activeTier: PassTierType.routine7Day,
-            mealsRemaining: 5,
-            totalMeals: 7,
+            mealsRemaining: 0,
+            totalMeals: 0,
             tomorrowCombo: 'A',
-            activeAddons: {BusinessRules.addonBoiledEggsId},
-            selectedCluster: const DeliveryCluster(
+            activeAddons: {},
+            selectedCluster: DeliveryCluster(
               id: 'cluster_01',
-              name: 'Sri Sai Boys Hostel Gate',
+              name: 'Sri Sai Boys Hostel Main Gate',
               addressZone: 'Bypass Road, Khammam',
-              landmark: 'Near Bus Stand, Khammam',
-              currentSubscribers: 36,
+              landmark: 'Near New Collectorate Arch',
+              currentSubscribers: 38,
               maxCapacity: 50,
               latitude: 17.2473,
               longitude: 80.1514,
             ),
-            tickets: _generateInitialTickets(),
+            tickets: [],
             isRenewAlertActive: false,
           ),
         ) {
     _loadPersistedState();
+    _listenToUserStreams();
+  }
+
+  void _listenToUserStreams() {
+    _authSub = FirebaseService.instance.authStateChanges.listen((user) {
+      _passesSub?.cancel();
+      _ticketsSub?.cancel();
+
+      if (user == null) {
+        state = state.copyWith(
+          hasActivePass: false,
+          mealsRemaining: 0,
+          totalMeals: 0,
+          tickets: const [],
+        );
+        return;
+      }
+
+      _passesSub = FirebaseService.instance.streamUserPasses(user.uid).listen((passes) {
+        if (passes.isEmpty) return;
+        final activePasses = passes.where((p) => (p['status'] as String?) == 'ACTIVE').toList();
+        if (activePasses.isEmpty) {
+          state = state.copyWith(hasActivePass: false, mealsRemaining: 0, totalMeals: 0);
+          return;
+        }
+        final latest = activePasses.first;
+        final tierKey = latest['tierKey'] as String? ?? 'routine7Day';
+        PassTierType tier = PassTierType.routine7Day;
+        if (tierKey == 'trial3Day') tier = PassTierType.trial3Day;
+        if (tierKey == 'power15Day') tier = PassTierType.power15Day;
+
+        state = state.copyWith(
+          hasActivePass: true,
+          activeTier: tier,
+          totalMeals: (latest['totalDays'] as num?)?.toInt() ?? 7,
+          mealsRemaining: (latest['remainingDays'] as num?)?.toInt() ?? 0,
+          tomorrowCombo: latest['comboSelection'] as String? ?? state.tomorrowCombo,
+        );
+      });
+
+      _ticketsSub = FirebaseService.instance.streamUserTickets(user.uid).listen((rawTickets) {
+        if (rawTickets.isEmpty) return;
+        final parsed = rawTickets.map((doc) {
+          final statusStr = (doc['status'] as String?) ?? 'SCHEDULED';
+          TicketStatusType status = TicketStatusType.scheduled;
+          if (statusStr == 'SKIPPED' || statusStr == 'EXPIRED') status = TicketStatusType.skipped;
+          if (statusStr == 'DELIVERED') status = TicketStatusType.delivered;
+          if (statusStr == 'LOCKED') status = TicketStatusType.locked;
+
+          final iso = doc['deliveryDateIso'] as String?;
+          final deliveryDate = iso != null ? (DateTime.tryParse(iso) ?? DateTimeUtils.targetDeliveryDate()) : DateTimeUtils.targetDeliveryDate();
+          final deliveredIso = doc['deliveredAtIso'] as String?;
+          final deliveredAt = deliveredIso != null ? DateTime.tryParse(deliveredIso) : null;
+
+          return MealTicket(
+            ticketId: (doc['ticketId'] as String?) ?? '',
+            passId: (doc['passId'] as String?) ?? '',
+            userId: (doc['userId'] as String?) ?? user.uid,
+            clusterId: (doc['clusterId'] as String?) ?? state.selectedCluster.id,
+            clusterName: (doc['clusterName'] as String?) ?? state.selectedCluster.name,
+            deliveryDate: deliveryDate,
+            comboSelection: (doc['comboSelection'] as String?) ?? 'A',
+            addOns: (doc['addOns'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
+            slot: (doc['slot'] as String?)?.contains('0800') == true ? MealSlotType.morning : MealSlotType.morning,
+            status: status,
+            bagToken: (doc['bagToken'] as String?) ?? '#HNG-01',
+            specialtyName: doc['specialtyName'] as String?,
+            companionMeals: (doc['companionMeals'] as num?)?.toInt() ?? 0,
+            dropProofImageUrl: doc['dropProofImageUrl'] as String?,
+            deliveredAt: deliveredAt,
+          );
+        }).toList();
+
+        state = state.copyWith(tickets: parsed);
+      });
+    });
   }
 
   Future<void> _loadPersistedState() async {
@@ -97,21 +191,6 @@ class CustomerDashboardViewModel extends StateNotifier<CustomerDashboardState> {
         ),
       );
     }
-
-    final savedPass = await LocalStorageService.instance.getSavedPassState();
-    if (savedPass != null) {
-      PassTierType tier = PassTierType.routine7Day;
-      if (savedPass['tier'] == 'trial3Day') tier = PassTierType.trial3Day;
-      if (savedPass['tier'] == 'power15Day') tier = PassTierType.power15Day;
-
-      state = state.copyWith(
-        hasActivePass: savedPass['hasActivePass'] as bool,
-        activeTier: tier,
-        mealsRemaining: savedPass['mealsRemaining'] as int,
-        totalMeals: savedPass['totalMeals'] as int,
-        tomorrowCombo: savedPass['tomorrowCombo'] as String,
-      );
-    }
   }
 
   static const List<String> khammamSpecialties = [
@@ -123,30 +202,34 @@ class CustomerDashboardViewModel extends StateNotifier<CustomerDashboardState> {
     'Karnataka Udupi Ghee Roast Dosa',
   ];
 
-  static List<MealTicket> _generateInitialTickets() {
-    final targetStart = DateTimeUtils.targetDeliveryDate();
+  /// Records a single-day morning tiffin order (creates 1 meal ticket, no pass)
+  void recordSingleDayOrder({
+    required String summaryName,
+    required Set<String> items,
+    int companionMeals = 0,
+    required String bagToken,
+  }) {
+    final targetDate = DateTimeUtils.targetDeliveryDate();
+    final uid = FirebaseService.instance.currentUser?.uid ?? 'customer';
+    final ticket = MealTicket(
+      ticketId: 'single_${DateTime.now().millisecondsSinceEpoch}',
+      passId: 'single_order',
+      userId: uid,
+      clusterId: state.selectedCluster.id,
+      clusterName: state.selectedCluster.name,
+      deliveryDate: targetDate,
+      comboSelection: 'A',
+      addOns: items.toList(),
+      slot: MealSlotType.morning,
+      status: TicketStatusType.scheduled,
+      bagToken: bagToken,
+      specialtyName: summaryName,
+      companionMeals: companionMeals,
+    );
 
-    return List<MealTicket>.generate(5, (index) {
-      final deliveryDate = targetStart.add(Duration(days: index));
-      final specialty = khammamSpecialties[index % khammamSpecialties.length];
-      final token = DateTimeUtils.generateBagToken('Sri Sai Boys Hostel Gate', index + 4);
-
-      return MealTicket(
-        ticketId: 't_00${index + 1}',
-        passId: 'pass_7d_user1',
-        userId: 'user_khammam_01',
-        clusterId: 'cluster_01',
-        clusterName: 'Sri Sai Boys Hostel Gate',
-        deliveryDate: deliveryDate,
-        comboSelection: index % 2 == 0 ? 'A' : 'B',
-        addOns: index == 0 ? const [BusinessRules.addonBoiledEggsId] : const [],
-        slot: MealSlotType.morning,
-        status: TicketStatusType.scheduled,
-        bagToken: token,
-        specialtyName: specialty,
-        companionMeals: 0,
-      );
-    });
+    state = state.copyWith(
+      tickets: [ticket, ...state.tickets],
+    );
   }
 
   void activateNewPass({
@@ -163,6 +246,7 @@ class CustomerDashboardViewModel extends StateNotifier<CustomerDashboardState> {
 
     final targetStart = DateTimeUtils.targetDeliveryDate();
     final baseToken = bagToken ?? DateTimeUtils.generateBagToken(state.selectedCluster.name, 7);
+    final uid = FirebaseService.instance.currentUser?.uid ?? 'customer';
 
     final generatedTickets = List<MealTicket>.generate(total, (index) {
       final deliveryDate = targetStart.add(Duration(days: index));
@@ -173,8 +257,8 @@ class CustomerDashboardViewModel extends StateNotifier<CustomerDashboardState> {
 
       return MealTicket(
         ticketId: 't_${DateTime.now().millisecondsSinceEpoch}_$index',
-        passId: 'pass_${tier.name}_user1',
-        userId: 'user_khammam_01',
+        passId: 'pass_${tier.name}_$uid',
+        userId: uid,
         clusterId: state.selectedCluster.id,
         clusterName: state.selectedCluster.name,
         deliveryDate: deliveryDate,
@@ -217,27 +301,10 @@ class CustomerDashboardViewModel extends StateNotifier<CustomerDashboardState> {
 
     if (target.status == TicketStatusType.scheduled) {
       updatedTickets[index] = target.copyWith(status: TicketStatusType.skipped);
-      final lastDate = updatedTickets.last.deliveryDate;
-      final appendedDate = lastDate.add(const Duration(days: 1));
-
-      final replacementTicket = MealTicket(
-        ticketId: 't_rep_${DateTime.now().millisecondsSinceEpoch}',
-        passId: target.passId,
-        userId: target.userId,
-        clusterId: target.clusterId,
-        clusterName: target.clusterName,
-        deliveryDate: appendedDate,
-        comboSelection: target.comboSelection,
-        addOns: target.addOns,
-        slot: target.slot,
-        status: TicketStatusType.scheduled,
-      );
-      updatedTickets.add(replacementTicket);
+      FirebaseService.instance.updateTicketStatus(ticketId: ticketId, status: 'SKIPPED');
     } else if (target.status == TicketStatusType.skipped) {
       updatedTickets[index] = target.copyWith(status: TicketStatusType.scheduled);
-      if (updatedTickets.length > state.totalMeals) {
-        updatedTickets.removeLast();
-      }
+      FirebaseService.instance.updateTicketStatus(ticketId: ticketId, status: 'SCHEDULED');
     }
 
     state = state.copyWith(tickets: updatedTickets);
@@ -251,6 +318,8 @@ class CustomerDashboardViewModel extends StateNotifier<CustomerDashboardState> {
     final updatedTickets = List<MealTicket>.from(state.tickets);
     updatedTickets[index] = updatedTickets[index].copyWith(comboSelection: newCombo);
 
+    FirebaseService.instance.updateTicketCombo(ticketId: ticketId, comboSelection: newCombo);
+
     if (index == 0) {
       state = state.copyWith(tomorrowCombo: newCombo, tickets: updatedTickets);
     } else {
@@ -262,52 +331,18 @@ class CustomerDashboardViewModel extends StateNotifier<CustomerDashboardState> {
     if (!DateTimeUtils.canModifyTomorrowMeal()) {
       throw Exception('403_CUTOFF_PASSED: Cannot switch meal after 9:00 PM IST.');
     }
-
-    final updatedTickets = List<MealTicket>.from(state.tickets);
-    if (updatedTickets.isNotEmpty) {
-      updatedTickets[0] = updatedTickets[0].copyWith(comboSelection: newCombo);
+    if (state.tickets.isNotEmpty) {
+      switchTicketCombo(state.tickets.first.ticketId, newCombo);
+    } else {
+      state = state.copyWith(tomorrowCombo: newCombo);
     }
-
-    state = state.copyWith(
-      tomorrowCombo: newCombo,
-      tickets: updatedTickets,
-    );
   }
 
   bool skipTomorrow() {
-    if (!DateTimeUtils.canModifyTomorrowMeal()) {
-      return false; // Cutoff passed
+    if (!DateTimeUtils.canModifyTomorrowMeal() || state.tickets.isEmpty) {
+      return false;
     }
-
-    if (state.tickets.isEmpty) return false;
-
-    final updatedTickets = List<MealTicket>.from(state.tickets);
-    final skipped = updatedTickets[0].copyWith(status: TicketStatusType.skipped);
-    updatedTickets[0] = skipped;
-
-    // Append new ticket at the tail
-    final lastDate = updatedTickets.last.deliveryDate;
-    final appendedDate = lastDate.add(const Duration(days: 1));
-
-    final newTicket = MealTicket(
-      ticketId: 't_${DateTime.now().millisecondsSinceEpoch}',
-      passId: skipped.passId,
-      userId: skipped.userId,
-      clusterId: skipped.clusterId,
-      clusterName: skipped.clusterName,
-      deliveryDate: appendedDate,
-      comboSelection: skipped.comboSelection,
-      addOns: skipped.addOns,
-      slot: skipped.slot,
-      status: TicketStatusType.scheduled,
-    );
-
-    updatedTickets.add(newTicket);
-
-    state = state.copyWith(
-      tickets: updatedTickets,
-    );
-    return true;
+    return togglePauseTicket(state.tickets.first.ticketId);
   }
 
   void updateCluster(DeliveryCluster newCluster) {
@@ -318,6 +353,23 @@ class CustomerDashboardViewModel extends StateNotifier<CustomerDashboardState> {
       zone: newCluster.addressZone,
       landmark: newCluster.landmark,
     );
+    final user = FirebaseService.instance.currentUser;
+    if (user != null) {
+      FirebaseService.instance.syncUserProfile(
+        uid: user.uid,
+        name: user.displayName ?? 'Hungr Foodie',
+        phone: user.phoneNumber ?? '',
+        dropGate: newCluster.name,
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    _passesSub?.cancel();
+    _ticketsSub?.cancel();
+    super.dispose();
   }
 }
 

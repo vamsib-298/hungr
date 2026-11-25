@@ -42,8 +42,9 @@ service cloud.firestore {
 
     // Pre-configured Delivery Clusters
     match /clusters/{clusterId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow read: if true;
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
     }
 
     // Pass Subscriptions
@@ -77,11 +78,10 @@ service cloud.firestore {
         isAdmin() ||
         // Driver can update status to DELIVERED and set dropProofImageUrl
         (isDriver() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'dropProofImageUrl', 'deliveredAt'])) ||
-        // Customer can only modify combo before 21:00 IST cutoff
+        // Customer can only modify combo or pause/resume before 21:00 IST cutoff
         (isOwner(resource.data.userId) &&
          isBeforeIstCutoff() &&
-         resource.data.status == 'SCHEDULED' &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['comboSelection', 'addOns']))
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['comboSelection', 'addOns', 'status']))
       );
 
       allow delete: if isAdmin();

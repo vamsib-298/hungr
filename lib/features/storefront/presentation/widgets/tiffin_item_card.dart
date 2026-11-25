@@ -18,6 +18,7 @@ class TiffinItemCard extends StatefulWidget {
   final int quantity;
   final VoidCallback onAdd;
   final VoidCallback onRemove;
+  final bool showKitchenName;
 
   const TiffinItemCard({
     super.key,
@@ -25,6 +26,7 @@ class TiffinItemCard extends StatefulWidget {
     required this.quantity,
     required this.onAdd,
     required this.onRemove,
+    this.showKitchenName = false,
   });
 
   @override
@@ -72,9 +74,9 @@ class _TiffinItemCardState extends State<TiffinItemCard> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 1. Food Image Thumbnail with Hero Tag
+              // 1. Food Image Thumbnail with unique Hero Tag
               Hero(
-                tag: 'tiffin_img_${item.id}',
+                tag: 'tiffin_img_${item.shopId ?? 'std'}_${item.id}',
                 child: Container(
                   width: 84,
                   height: 84,
@@ -193,6 +195,27 @@ class _TiffinItemCardState extends State<TiffinItemCard> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
+                    if (widget.showKitchenName && item.shopName != null && item.shopName!.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          const Icon(Icons.storefront_rounded, size: 11, color: AppColors.zomatoRed),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              item.shopName!,
+                              style: AppTypography.caption.copyWith(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textSecondary,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 2),
 
                     // Description

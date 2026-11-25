@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_dimensions.dart';
 import '../../../../core/constants/app_typography.dart';
 import '../../../../core/router/route_names.dart';
+import '../../../../core/utils/whatsapp_link_helper.dart';
 import '../../../../core/widgets/obsidian_card.dart';
 import '../../../auth/presentation/viewmodels/auth_viewmodel.dart';
 import '../../../storefront/presentation/viewmodels/customer_dashboard_viewmodel.dart';
@@ -13,7 +15,9 @@ import '../../../subscription/presentation/viewmodels/subscription_history_viewm
 import '../../../subscription/presentation/viewmodels/referral_viewmodel.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
-  const ProfileScreen({super.key});
+  final bool isEmbedded;
+
+  const ProfileScreen({super.key, this.isEmbedded = false});
 
   @override
   ConsumerState<ProfileScreen> createState() => _ProfileScreenState();
@@ -93,20 +97,25 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 backgroundColor: AppColors.urgentCrimson,
                 foregroundColor: Colors.white,
               ),
-              onPressed: () {
+              onPressed: () async {
                 Navigator.of(context).pop();
                 HapticFeedback.heavyImpact();
-                ref.read(authProvider.notifier).logout();
-                ScaffoldMessenger.of(context).showSnackBar(
+                final messenger = ScaffoldMessenger.of(this.context);
+                final router = GoRouter.of(this.context);
+                final deleted = await ref.read(authProvider.notifier).deleteAccount();
+                if (!deleted) {
+                  await ref.read(authProvider.notifier).logout();
+                }
+                messenger.showSnackBar(
                   SnackBar(
                     backgroundColor: AppColors.urgentCrimson,
                     content: Text(
                       'Account & personal data deleted successfully.',
-                      style: AppTypography.labelLarge,
+                      style: AppTypography.labelLarge.copyWith(color: Colors.white),
                     ),
                   ),
                 );
-                context.go(RouteNames.phoneAuth);
+                router.go(RouteNames.phoneAuth);
               },
               child: const Text('Delete Permanently'),
             ),
@@ -114,6 +123,56 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         );
       },
     );
+  }
+
+  void _showEditNameDialog(BuildContext context, String currentName) {
+    final controller = TextEditingController(text: currentName);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Update Name', style: AppTypography.titleLarge.copyWith(fontWeight: FontWeight.w800)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Full Name',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.zomatoRed, foregroundColor: Colors.white),
+            onPressed: () {
+              final next = controller.text.trim();
+              if (next.isNotEmpty) {
+                ref.read(authProvider.notifier).updateProfile(name: next);
+              }
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openWhatsAppSupport() async {
+    HapticFeedback.lightImpact();
+    const msg = 'Hi Hungr Support! I need help with my morning tiffin order.';
+    final uri = Uri.parse(WhatsAppLinkHelper.getWhatsAppWebUrl(phoneNumber: '919876543210', message: msg));
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFF1F2937),
+          content: Text('WhatsApp Support: +91 98765 43210', style: AppTypography.labelLarge.copyWith(color: Colors.white)),
+        ),
+      );
+    }
   }
 
   @override
@@ -126,6 +185,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
+        if (widget.isEmbedded) return;
         if (context.canPop()) {
           context.pop();
         } else {
@@ -142,70 +202,125 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           backgroundColor: Colors.white,
           elevation: 0,
           scrolledUnderElevation: 1,
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppColors.textPrimary, size: 18),
-            onPressed: () {
-              if (context.canPop()) {
-                context.pop();
-              } else {
-                context.go(RouteNames.storefront);
-              }
-            },
-          ),
+          automaticallyImplyLeading: false,
+          leading: widget.isEmbedded
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppColors.textPrimary, size: 18),
+                  onPressed: () {
+                    if (context.canPop()) {
+                      context.pop();
+                    } else {
+                      context.go(RouteNames.storefront);
+                    }
+                  },
+                ),
         ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppDimensions.p16),
+        padding: const EdgeInsets.fromLTRB(AppDimensions.p16, AppDimensions.p16, AppDimensions.p16, 90),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // User Header Card
-            ObsidianCard(
-              borderColor: AppColors.zomatoRed.withOpacity(0.4),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 30,
-                    backgroundColor: AppColors.zomatoRedSurface,
-                    child: Text(
-                      authState.userName.isNotEmpty ? authState.userName[0].toUpperCase() : 'V',
-                      style: AppTypography.displayMedium.copyWith(
-                        color: AppColors.zomatoRed,
-                        fontWeight: FontWeight.bold,
+            if (!authState.isAuthenticated)
+              ObsidianCard(
+                borderColor: AppColors.zomatoRed.withOpacity(0.5),
+                child: Row(
+                  children: [
+                    const CircleAvatar(
+                      radius: 26,
+                      backgroundColor: AppColors.zomatoRedSurface,
+                      child: Icon(Icons.person_outline_rounded, color: AppColors.zomatoRed, size: 28),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Sign in to Hungr', style: AppTypography.titleLarge.copyWith(fontWeight: FontWeight.bold)),
+                          Text('Verify your phone to order tiffins & track morning drops', style: AppTypography.caption.copyWith(color: AppColors.textSecondary)),
+                        ],
                       ),
                     ),
-                  ),
-                  const SizedBox(width: AppDimensions.p16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(authState.userName, style: AppTypography.titleLarge.copyWith(fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 2),
-                        Row(
-                          children: [
-                            Text(authState.phoneNumber, style: AppTypography.bodySmall),
-                            const SizedBox(width: 6),
-                            const Icon(Icons.verified, color: AppColors.neonMint, size: 14),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: AppColors.neonMint.withOpacity(0.15),
-                            borderRadius: AppDimensions.radius8,
-                          ),
-                          child: Text(
-                            'STUDENT / RESIDENT VERIFIED',
-                            style: AppTypography.monoBadge.copyWith(color: AppColors.neonMint, fontSize: 9),
-                          ),
-                        ),
-                      ],
+                    ElevatedButton(
+                      onPressed: () => context.push(RouteNames.phoneAuth),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.zomatoRed,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: const Text('Login'),
                     ),
-                  ),
-                ],
+                  ],
+                ),
+              )
+            else
+              // User Header Card
+              ObsidianCard(
+                borderColor: AppColors.zomatoRed.withOpacity(0.4),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 30,
+                      backgroundColor: AppColors.zomatoRedSurface,
+                      child: Text(
+                        authState.userName.isNotEmpty ? authState.userName[0].toUpperCase() : 'H',
+                        style: AppTypography.displayMedium.copyWith(
+                          color: AppColors.zomatoRed,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: AppDimensions.p16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  authState.userName,
+                                  style: AppTypography.titleLarge.copyWith(fontWeight: FontWeight.bold),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.edit_outlined, size: 16, color: AppColors.zomatoRed),
+                                padding: const EdgeInsets.only(left: 6),
+                                constraints: const BoxConstraints(),
+                                onPressed: () => _showEditNameDialog(context, authState.userName),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              Text(
+                                authState.phoneNumber.isNotEmpty ? authState.phoneNumber : 'Verified Customer',
+                                style: AppTypography.bodySmall,
+                              ),
+                              const SizedBox(width: 6),
+                              const Icon(Icons.verified, color: AppColors.neonMint, size: 14),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.neonMint.withOpacity(0.15),
+                              borderRadius: AppDimensions.radius8,
+                            ),
+                            child: Text(
+                              'VERIFIED CUSTOMER',
+                              style: AppTypography.monoBadge.copyWith(color: AppColors.neonMint, fontSize: 9),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
 
             const SizedBox(height: AppDimensions.p16),
 
@@ -330,21 +445,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 children: [
                   ListTile(
                     leading: const Icon(Icons.chat_bubble_outline, color: Color(0xFF25D366)),
-                    title: Text('WhatsApp Customer Concierge', style: AppTypography.titleMedium),
-                    subtitle: Text('Instant help via +91 98765 43210', style: AppTypography.bodySmall),
+                    title: Text('WhatsApp Customer Support', style: AppTypography.titleMedium),
+                    subtitle: Text('Chat with us for delivery or order help', style: AppTypography.bodySmall),
                     trailing: const Icon(Icons.chevron_right, color: Color(0xFF25D366)),
-                    onTap: () {
-                      HapticFeedback.lightImpact();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          backgroundColor: const Color(0xFF25D366),
-                          content: Text(
-                            'Connecting to Hungr WhatsApp Concierge (+91 98765 43210)...',
-                            style: AppTypography.labelLarge,
-                          ),
-                        ),
-                      );
-                    },
+                    onTap: _openWhatsAppSupport,
                   ),
                   const Divider(color: AppColors.surfaceHighlight),
                   ListTile(
@@ -401,7 +505,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'HUNGR v1.0.10 (Build 11)',
+                    'HUNGR v1.0.11 (Build 12)',
                     style: AppTypography.monoBadge.copyWith(
                       color: AppColors.textSubtle,
                       fontSize: 11,
@@ -409,7 +513,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Crafted for Khammam • Hyper-Batched Morning Tiffin',
+                    'Crafted for Khammam • Fresh Morning Tiffin Delivery',
                     style: AppTypography.bodySmall.copyWith(
                       color: AppColors.textSubtle.withOpacity(0.6),
                       fontSize: 10,

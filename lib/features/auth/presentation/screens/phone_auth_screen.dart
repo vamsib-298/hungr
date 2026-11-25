@@ -7,7 +7,6 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_dimensions.dart';
 import '../../../../core/constants/app_typography.dart';
 import '../../../../core/router/route_names.dart';
-import '../../../../core/widgets/obsidian_card.dart';
 import '../viewmodels/auth_viewmodel.dart';
 
 class PhoneAuthScreen extends ConsumerStatefulWidget {
@@ -65,21 +64,15 @@ class _PhoneAuthScreenState extends ConsumerState<PhoneAuthScreen> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            backgroundColor: const Color(0xFF1F2937),
+            backgroundColor: AppColors.urgentCrimson,
             content: Text(
-              '$error (Proceeding to verification screen)',
+              error,
               style: AppTypography.labelLarge.copyWith(color: Colors.white),
             ),
             behavior: SnackBarBehavior.floating,
             duration: const Duration(seconds: 4),
           ),
         );
-
-        // Fail-safe transition so user or Play Store reviewer is never blocked
-        context.push(RouteNames.otpVerify, extra: {
-          'phone': cleanPhone,
-          'name': displayName,
-        });
       },
     );
   }
@@ -93,10 +86,36 @@ class _PhoneAuthScreenState extends ConsumerState<PhoneAuthScreen> {
         elevation: 0,
         leading: Navigator.canPop(context)
             ? IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppColors.textCrispWhite, size: 20),
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppColors.textPrimary, size: 20),
                 onPressed: () => Navigator.of(context).pop(),
               )
             : null,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: TextButton(
+              onPressed: () {
+                HapticFeedback.lightImpact();
+                context.go(RouteNames.storefront);
+              },
+              style: TextButton.styleFrom(
+                backgroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  side: const BorderSide(color: AppColors.charcoalBorder),
+                ),
+              ),
+              child: Text(
+                'Browse Menu',
+                style: AppTypography.labelSmall.copyWith(
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -375,32 +394,7 @@ class _PhoneAuthScreenState extends ConsumerState<PhoneAuthScreen> {
                   .animate()
                   .fadeIn(delay: 250.ms, duration: 400.ms),
 
-              const SizedBox(height: 14),
-
-              // Instant Preview for Testers & Fast Exploration
-              Center(
-                child: TextButton.icon(
-                  onPressed: () {
-                    HapticFeedback.lightImpact();
-                    final name = _nameController.text.trim();
-                    ref.read(authProvider.notifier).login(
-                          phone: '+91 98765 43210',
-                          name: name.isNotEmpty ? name : 'Hungr Foodie',
-                        );
-                    context.go(RouteNames.storefront);
-                  },
-                  icon: const Icon(Icons.bolt_rounded, size: 18, color: AppColors.goldenAmber),
-                  label: Text(
-                    'Instant Preview • Explore Live Kitchens',
-                    style: AppTypography.labelMedium.copyWith(
-                      color: AppColors.textSecondary,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 28),
+              const SizedBox(height: 24),
 
               // Micro Trust Badges
               Center(

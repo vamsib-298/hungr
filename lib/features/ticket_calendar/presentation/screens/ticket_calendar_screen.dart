@@ -58,29 +58,43 @@ class _TicketCalendarScreenState extends ConsumerState<TicketCalendarScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              height: 180,
+              height: 140,
               width: double.infinity,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
-                color: const Color(0xFFF3F4F6),
-                image: const DecorationImage(
-                  image: AssetImage('assets/images/gate_drop_sample.jpg'),
-                  fit: BoxFit.cover,
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFECFDF5), Color(0xFFD1FAE5)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
+                border: Border.all(color: const Color(0xFF6EE7B7)),
               ),
               child: Stack(
                 children: [
+                  const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.verified_rounded, color: AppColors.neonMint, size: 48),
+                        SizedBox(height: 6),
+                        Text(
+                          'Gate Drop Confirmed',
+                          style: TextStyle(color: Color(0xFF065F46), fontWeight: FontWeight.w800),
+                        ),
+                      ],
+                    ),
+                  ),
                   Positioned(
                     bottom: 8,
                     left: 8,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.8),
+                        color: Colors.black.withOpacity(0.75),
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        'Token: #$token • Dropped: 07:34 AM',
+                        'Token: #$token • Ready at Gate',
                         style: AppTypography.caption.copyWith(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
@@ -403,18 +417,26 @@ class _TicketCalendarScreenState extends ConsumerState<TicketCalendarScreen> {
             ),
           ),
 
-          // Live Heat Preservation Window Card (30-min cold-food protection)
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: GateHeatPreservationCard(
-                bagToken: tickets.isNotEmpty ? tickets.first.bagToken : '#SS-04',
-                clusterName: dashboardState.selectedCluster.name,
-                gateLocationDetail: 'Security Desk • Shelf #2',
-                droppedAt: DateTime.now().subtract(const Duration(minutes: 8)),
+          // Live Heat Preservation Window Card (ONLY shown when an actual meal is delivered today)
+          if (tickets.any((t) => t.status == TicketStatusType.delivered && t.deliveredAt != null))
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Builder(
+                  builder: (context) {
+                    final delivered = tickets.firstWhere(
+                      (t) => t.status == TicketStatusType.delivered && t.deliveredAt != null,
+                    );
+                    return GateHeatPreservationCard(
+                      bagToken: delivered.bagToken,
+                      clusterName: delivered.clusterName,
+                      gateLocationDetail: 'Main Gate Security Desk',
+                      droppedAt: delivered.deliveredAt!,
+                    );
+                  },
+                ),
               ),
             ),
-          ),
 
           // Filter Chips (Scrollable to prevent overflow)
           SliverToBoxAdapter(
@@ -443,13 +465,32 @@ class _TicketCalendarScreenState extends ConsumerState<TicketCalendarScreen> {
             SliverFillRemaining(
               hasScrollBody: false,
               child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.event_available_outlined, size: 48, color: AppColors.textSubtle),
-                    const SizedBox(height: 12),
-                    Text('No tickets in this category', style: AppTypography.titleMedium),
-                  ],
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.event_available_outlined, size: 48, color: AppColors.textSubtle),
+                      const SizedBox(height: 12),
+                      Text('No scheduled meals yet', style: AppTypography.titleMedium),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Order fresh breakfast from Khammam kitchens to see your morning tickets here.',
+                        style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: () => context.go(RouteNames.storefront),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.zomatoRed,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: const Text('Order Breakfast Now'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             )

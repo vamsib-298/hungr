@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/services/firebase_service.dart';
 import '../domain/cluster_model.dart';
 
 final clusterRepositoryProvider = Provider<ClusterRepository>((ref) {
@@ -169,7 +170,25 @@ class ClusterRepository {
   ];
 
   Future<List<DeliveryCluster>> fetchActiveClusters() async {
-    await Future.delayed(const Duration(milliseconds: 200));
+    try {
+      final snapshot = await FirebaseService.instance.firestore.collection('clusters').get();
+      if (snapshot.docs.isNotEmpty) {
+        final remote = snapshot.docs.map((doc) {
+          final d = doc.data();
+          return DeliveryCluster(
+            id: doc.id,
+            name: (d['name'] as String?) ?? 'Khammam Gate',
+            addressZone: (d['addressZone'] as String?) ?? 'Khammam',
+            landmark: (d['landmark'] as String?) ?? 'Main Gate',
+            currentSubscribers: (d['currentSubscribers'] as num?)?.toInt() ?? 10,
+            maxCapacity: (d['maxCapacity'] as num?)?.toInt() ?? 50,
+            latitude: (d['latitude'] as num?)?.toDouble() ?? 17.2473,
+            longitude: (d['longitude'] as num?)?.toDouble() ?? 80.1514,
+          );
+        }).toList();
+        return [...remote, ..._clusters.where((c) => !remote.any((r) => r.id == c.id))];
+      }
+    } catch (_) {}
     return _clusters;
   }
 
@@ -179,18 +198,35 @@ class ClusterRepository {
     required String addressZone,
     required String landmark,
   }) async {
-    await Future.delayed(const Duration(milliseconds: 200));
+    final id = 'custom_${DateTime.now().millisecondsSinceEpoch}';
+    final resolvedZone = addressZone.contains('Khammam') ? addressZone : '$addressZone, Khammam';
+    final resolvedLandmark = landmark.isEmpty ? 'Main Entrance Security Desk' : landmark;
+
     final newCluster = DeliveryCluster(
-      id: 'custom_${DateTime.now().millisecondsSinceEpoch}',
+      id: id,
       name: '$buildingName Gate',
-      addressZone: addressZone.contains('Khammam') ? addressZone : '$addressZone, Khammam',
-      landmark: landmark.isEmpty ? 'Main Entrance Watchman Desk' : landmark,
+      addressZone: resolvedZone,
+      landmark: resolvedLandmark,
       currentSubscribers: 1,
       maxCapacity: 30,
       latitude: 17.2470,
       longitude: 80.1510,
     );
     _clusters = [newCluster, ..._clusters];
+
+    try {
+      await FirebaseService.instance.firestore.collection('clusters').doc(id).set({
+        'id': id,
+        'name': newCluster.name,
+        'addressZone': resolvedZone,
+        'landmark': resolvedLandmark,
+        'currentSubscribers': 1,
+        'maxCapacity': 30,
+        'latitude': 17.2470,
+        'longitude': 80.1510,
+      });
+    } catch (_) {}
+
     return newCluster;
   }
 }

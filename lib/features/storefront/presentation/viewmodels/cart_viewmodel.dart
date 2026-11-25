@@ -1,8 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/constants/business_rules.dart';
+import '../../../../core/services/firebase_service.dart';
+import '../../domain/offer_model.dart';
 import '../../domain/tiffin_item_model.dart';
 import '../widgets/pass_card_3d.dart';
-import '../../../../core/services/firebase_service.dart';
 
 /// Enum distinguishing between a daily one-off meal purchase and a multi-day pass
 enum OrderMode {
@@ -10,25 +11,31 @@ enum OrderMode {
   subscriptionPass,
 }
 
-/// Immutable state holding the customer's cart configuration and selections
+/// Immutable state holding the customer's cart configuration and live resolved items
 class CartState {
   final OrderMode orderMode;
   final PassTierType? selectedPassTier;
   final int selectedPassDays;
+  final String? activeKitchenId;
+  final String? activeKitchenName;
   final Map<String, int> itemQuantities;
+  final Map<String, TiffinItem> itemDetails;
   final String selectedDeliverySlot;
   final String? appliedCoupon;
   final int discountAmount;
   final String deliveryInstructions;
   final String paymentMethod;
   final int roommateMealCount; // +₹45 Companion Meal (Same Gate Bag)
-  final bool autoRotatePassMenu; // Auto-rotate 6 authentic Khammam specialties
+  final bool autoRotatePassMenu;
 
   const CartState({
     this.orderMode = OrderMode.singleDay,
     this.selectedPassTier = PassTierType.routine7Day,
     this.selectedPassDays = 7,
+    this.activeKitchenId,
+    this.activeKitchenName,
     this.itemQuantities = const {},
+    this.itemDetails = const {},
     this.selectedDeliverySlot = '07:30 AM – 08:00 AM',
     this.appliedCoupon,
     this.discountAmount = 0,
@@ -40,6 +47,11 @@ class CartState {
 
   factory CartState.initial() => const CartState();
 
+  /// Resolve item metadata from live catalog map or standard menu fallback
+  TiffinItem? resolveItem(String itemId) {
+    return itemDetails[itemId] ?? TiffinItem.findById(itemId);
+  }
+
   /// Total cost of companion roommate meals (₹45 each, instead of ₹59)
   int get roommateSubtotal => roommateMealCount * 45;
 
@@ -47,7 +59,7 @@ class CartState {
   int get itemsSubtotal {
     int sum = 0;
     for (final entry in itemQuantities.entries) {
-      final item = TiffinItem.findById(entry.key);
+      final item = resolveItem(entry.key);
       if (item != null) {
         sum += item.price * entry.value;
       }
@@ -60,11 +72,11 @@ class CartState {
     if (selectedPassTier == null) return 0;
     switch (selectedPassTier!) {
       case PassTierType.trial3Day:
-        return BusinessRules.pass3DayPrice; // 165
+        return BusinessRules.pass3DayPrice;
       case PassTierType.routine7Day:
-        return BusinessRules.pass7DayPrice; // 350
+        return BusinessRules.pass7DayPrice;
       case PassTierType.power15Day:
-        return BusinessRules.pass15DayPrice; // 720
+        return BusinessRules.pass15DayPrice;
     }
   }
 
@@ -72,7 +84,7 @@ class CartState {
   int get savingsAmount {
     int itemSavings = 0;
     for (final entry in itemQuantities.entries) {
-      final item = TiffinItem.findById(entry.key);
+      final item = resolveItem(entry.key);
       if (item != null && item.originalPrice > item.price) {
         itemSavings += (item.originalPrice - item.price) * entry.value;
       }
@@ -87,9 +99,7 @@ class CartState {
       }
     }
 
-    // Companion meal discount savings (₹59 regular vs ₹45 roommate meal)
     final roommateSavings = roommateMealCount * 14;
-
     return itemSavings + passSavings + discountAmount + roommateSavings;
   }
 
@@ -121,7 +131,11 @@ class CartState {
     PassTierType? selectedPassTier,
     bool clearPassTier = false,
     int? selectedPassDays,
+    String? activeKitchenId,
+    String? activeKitchenName,
+    bool clearKitchen = false,
     Map<String, int>? itemQuantities,
+    Map<String, TiffinItem>? itemDetails,
     String? selectedDeliverySlot,
     String? appliedCoupon,
     bool clearCoupon = false,
@@ -133,16 +147,16 @@ class CartState {
   }) {
     return CartState(
       orderMode: orderMode ?? this.orderMode,
-      selectedPassTier:
-          clearPassTier ? null : (selectedPassTier ?? this.selectedPassTier),
+      selectedPassTier: clearPassTier ? null : (selectedPassTier ?? this.selectedPassTier),
       selectedPassDays: selectedPassDays ?? this.selectedPassDays,
+      activeKitchenId: clearKitchen ? null : (activeKitchenId ?? this.activeKitchenId),
+      activeKitchenName: clearKitchen ? null : (activeKitchenName ?? this.activeKitchenName),
       itemQuantities: itemQuantities ?? this.itemQuantities,
-      selectedDeliverySlot:
-          selectedDeliverySlot ?? this.selectedDeliverySlot,
+      itemDetails: itemDetails ?? this.itemDetails,
+      selectedDeliverySlot: selectedDeliverySlot ?? this.selectedDeliverySlot,
       appliedCoupon: clearCoupon ? null : (appliedCoupon ?? this.appliedCoupon),
       discountAmount: discountAmount ?? this.discountAmount,
-      deliveryInstructions:
-          deliveryInstructions ?? this.deliveryInstructions,
+      deliveryInstructions: deliveryInstructions ?? this.deliveryInstructions,
       paymentMethod: paymentMethod ?? this.paymentMethod,
       roommateMealCount: roommateMealCount ?? this.roommateMealCount,
       autoRotatePassMenu: autoRotatePassMenu ?? this.autoRotatePassMenu,
@@ -150,47 +164,65 @@ class CartState {
   }
 }
 
-/// StateNotifier orchestrating cart operations, item quantities, coupons, and checkout setup
+/// StateNotifier orchestrating cart operations, kitchen conflict guards, live coupons, and checkout setup
 class CartViewModel extends StateNotifier<CartState> {
   CartViewModel() : super(CartState.initial());
 
-  /// Increase roommate companion meal count (+₹45, same bag drop)
-  void addRoommateMeal() {
-    state = state.copyWith(roommateMealCount: state.roommateMealCount + 1);
+  /// Returns true if adding [item] conflicts with an existing different kitchen in cart
+  bool hasKitchenConflict(TiffinItem item) {
+    if (state.orderMode == OrderMode.subscriptionPass) return false;
+    if (state.itemQuantities.isEmpty || state.activeKitchenId == null) return false;
+    final incomingKitchen = item.shopId;
+    if (incomingKitchen == null || incomingKitchen.isEmpty) return false;
+    return state.activeKitchenId != incomingKitchen;
   }
 
-  /// Decrease roommate companion meal count
-  void removeRoommateMeal() {
-    if (state.roommateMealCount > 0) {
-      state = state.copyWith(roommateMealCount: state.roommateMealCount - 1);
-    }
+  /// Replaces cart with new kitchen & item (Swiggy-style "Replace cart?" flow)
+  void replaceCartWithItem(TiffinItem item) {
+    state = CartState.initial().copyWith(
+      orderMode: OrderMode.singleDay,
+      activeKitchenId: item.shopId,
+      activeKitchenName: item.shopName,
+      itemQuantities: {item.id: 1},
+      itemDetails: {item.id: item},
+    );
+    _syncCartTracking();
   }
 
-  /// Toggle smart pass menu auto-rotation
-  void toggleAutoRotatePassMenu(bool value) {
-    state = state.copyWith(autoRotatePassMenu: value);
+  /// Increase item quantity by 1 (prefer passing full TiffinItem so live admin dishes/prices work)
+  void addTiffinItem(TiffinItem item) {
+    final updatedQty = Map<String, int>.from(state.itemQuantities);
+    updatedQty[item.id] = (updatedQty[item.id] ?? 0) + 1;
+
+    final updatedDetails = Map<String, TiffinItem>.from(state.itemDetails);
+    updatedDetails[item.id] = item;
+
+    state = state.copyWith(
+      orderMode: state.orderMode == OrderMode.subscriptionPass && updatedQty.length == 1
+          ? OrderMode.singleDay
+          : state.orderMode,
+      activeKitchenId: state.activeKitchenId ?? item.shopId,
+      activeKitchenName: state.activeKitchenName ?? item.shopName,
+      itemQuantities: updatedQty,
+      itemDetails: updatedDetails,
+    );
+    _syncCartTracking();
   }
 
-  void _syncCartTracking() {
-    try {
-      final phone = FirebaseService.instance.currentUser?.phoneNumber ?? 'active_cart_user';
-      FirebaseService.instance.trackAbandonedCart(
-        phone: phone,
-        items: state.itemQuantities,
-        subtotal: state.itemsSubtotal,
-      );
-    } catch (_) {}
-  }
-
-  /// Increase item quantity by 1
+  /// Backwards-compatible add by itemId (falls back to standard menu if item not in details map)
   void addItem(String itemId) {
+    final existing = state.resolveItem(itemId);
+    if (existing != null) {
+      addTiffinItem(existing);
+      return;
+    }
     final updated = Map<String, int>.from(state.itemQuantities);
     updated[itemId] = (updated[itemId] ?? 0) + 1;
     state = state.copyWith(itemQuantities: updated);
     _syncCartTracking();
   }
 
-  /// Decrease item quantity by 1, removing from cart when quantity drops to 0
+  /// Decrease item quantity by 1, clearing kitchen lock when cart empties
   void removeItem(String itemId) {
     final updated = Map<String, int>.from(state.itemQuantities);
     if (!updated.containsKey(itemId)) return;
@@ -201,34 +233,62 @@ class CartViewModel extends StateNotifier<CartState> {
     } else {
       updated[itemId] = currentQty - 1;
     }
-    state = state.copyWith(itemQuantities: updated);
-    _syncCartTracking();
-  }
 
-  /// Explicitly set item quantity (removes item if quantity <= 0)
-  void setItemQuantity(String itemId, int quantity) {
-    final updated = Map<String, int>.from(state.itemQuantities);
-    if (quantity <= 0) {
-      updated.remove(itemId);
-    } else {
-      updated[itemId] = quantity;
+    final updatedDetails = Map<String, TiffinItem>.from(state.itemDetails);
+    if (!updated.containsKey(itemId)) {
+      updatedDetails.remove(itemId);
     }
-    state = state.copyWith(itemQuantities: updated);
+
+    state = state.copyWith(
+      itemQuantities: updated,
+      itemDetails: updatedDetails,
+      clearKitchen: updated.isEmpty,
+    );
     _syncCartTracking();
   }
 
-  /// Clear all selected items from the cart
+  void addRoommateMeal() {
+    state = state.copyWith(roommateMealCount: state.roommateMealCount + 1);
+  }
+
+  void removeRoommateMeal() {
+    if (state.roommateMealCount > 0) {
+      state = state.copyWith(roommateMealCount: state.roommateMealCount - 1);
+    }
+  }
+
+  void toggleAutoRotatePassMenu(bool value) {
+    state = state.copyWith(autoRotatePassMenu: value);
+  }
+
+  void _syncCartTracking() {
+    try {
+      final phone = FirebaseService.instance.currentUser?.phoneNumber;
+      if (phone == null || phone.isEmpty) return;
+      FirebaseService.instance.trackAbandonedCart(
+        phone: phone,
+        items: state.itemQuantities,
+        subtotal: state.itemsSubtotal,
+      );
+    } catch (_) {}
+  }
+
   void clearCart() {
-    state = state.copyWith(itemQuantities: const {});
+    state = state.copyWith(
+      itemQuantities: const {},
+      itemDetails: const {},
+      clearKitchen: true,
+      clearCoupon: true,
+      discountAmount: 0,
+      roommateMealCount: 0,
+    );
     _syncCartTracking();
   }
 
-  /// Switch between Single Day Tiffin and Subscription Pass order modes
   void setOrderMode(OrderMode mode) {
     state = state.copyWith(orderMode: mode);
   }
 
-  /// Select a subscription pass tier and update corresponding meal days count
   void selectPassTier(PassTierType tier) {
     int days = 7;
     switch (tier) {
@@ -249,34 +309,39 @@ class CartViewModel extends StateNotifier<CartState> {
     );
   }
 
-  /// Choose morning delivery time window ('07:30 AM – 08:00 AM' or '08:00 AM – 08:30 AM')
   void selectDeliverySlot(String slot) {
     state = state.copyWith(selectedDeliverySlot: slot);
   }
 
-  /// Apply promo coupons:
-  /// - 'FIRST50' = ₹50 off
-  /// - 'HUNGRFREE' = ₹25 off
-  /// Returns `true` if valid coupon was applied, `false` otherwise.
-  bool applyCoupon(String code) {
+  /// Apply coupon against live Firestore offers (and return error message if invalid / below minOrder)
+  String? applyCoupon(String code, {List<OfferModel> availableOffers = const []}) {
     final normalized = code.trim().toUpperCase();
-    if (normalized == 'FIRST50') {
-      state = state.copyWith(
-        appliedCoupon: 'FIRST50',
-        discountAmount: 50,
-      );
-      return true;
-    } else if (normalized == 'HUNGRFREE') {
-      state = state.copyWith(
-        appliedCoupon: 'HUNGRFREE',
-        discountAmount: 25,
-      );
-      return true;
+    if (normalized.isEmpty) return 'Enter a promo code.';
+
+    final allOffers = availableOffers.isNotEmpty ? availableOffers : OfferModel.defaultOffers;
+    final matched = allOffers.where((o) => o.code == normalized && o.isActive).toList();
+
+    if (matched.isEmpty) {
+      return 'Promo code "$normalized" is invalid or expired.';
     }
-    return false;
+
+    final offer = matched.first;
+    final baseAmount = state.orderMode == OrderMode.subscriptionPass
+        ? state.passSubtotal + state.itemsSubtotal
+        : state.itemsSubtotal;
+
+    if (baseAmount < offer.minOrder) {
+      return 'Minimum order of ₹${offer.minOrder} required for ${offer.code}.';
+    }
+
+    final discount = offer.computeDiscount(baseAmount);
+    state = state.copyWith(
+      appliedCoupon: offer.code,
+      discountAmount: discount,
+    );
+    return null; // null = success
   }
 
-  /// Remove currently applied coupon and reset discount to 0
   void removeCoupon() {
     state = state.copyWith(
       clearCoupon: true,
@@ -284,27 +349,23 @@ class CartViewModel extends StateNotifier<CartState> {
     );
   }
 
-  /// Update payment gateway or method selection
   void setPaymentMethod(String method) {
     state = state.copyWith(paymentMethod: method);
   }
 
-  /// Set optional delivery notes or hostel gate directions
   void setDeliveryInstructions(String instructions) {
     state = state.copyWith(deliveryInstructions: instructions);
   }
 
-  /// Reset the cart to initial state
   void reset() {
     state = CartState.initial();
   }
 }
 
-/// Provider for accessing and modifying Hungr's shopping cart state
-final cartViewModelProvider =
-    StateNotifierProvider<CartViewModel, CartState>((ref) {
+final cartViewModelProvider = StateNotifierProvider<CartViewModel, CartState>((ref) {
   return CartViewModel();
 });
 
-/// Convenient alias for storefront screens
-final cartProvider = cartViewModelProvider;
+final cartProvider = Provider<CartState>((ref) {
+  return ref.watch(cartViewModelProvider);
+});

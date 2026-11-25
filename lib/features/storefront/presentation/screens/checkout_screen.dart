@@ -15,6 +15,7 @@ import '../../../subscription/presentation/viewmodels/referral_viewmodel.dart';
 import '../../domain/tiffin_item_model.dart';
 import '../viewmodels/cart_viewmodel.dart';
 import '../viewmodels/customer_dashboard_viewmodel.dart';
+import '../viewmodels/offers_viewmodel.dart';
 import '../widgets/pass_card_3d.dart';
 import '../../../../core/services/firebase_service.dart';
 import '../../../../core/services/notification_service.dart';
@@ -44,18 +45,20 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     super.dispose();
   }
 
-  void _applyCoupon() {
-    final code = _couponController.text.trim().toUpperCase();
+  void _applyCoupon([String? presetCode]) {
+    final code = (presetCode ?? _couponController.text).trim().toUpperCase();
     if (code.isEmpty) return;
 
     final cartNotifier = ref.read(cartViewModelProvider.notifier);
-    final success = cartNotifier.applyCoupon(code);
+    final availableOffers = ref.read(offersProvider);
+    final error = cartNotifier.applyCoupon(code, availableOffers: availableOffers);
     setState(() {
-      if (success) {
+      if (error == null) {
         _couponError = null;
+        _couponController.text = code;
         HapticFeedback.lightImpact();
       } else {
-        _couponError = 'Invalid promo code. Try FIRST50 or HUNGRFREE';
+        _couponError = error;
         HapticFeedback.vibrate();
       }
     });
@@ -63,34 +66,102 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
 
   Future<void> _handlePlaceOrder(CustomerDashboardState customerState, CartState cartState) async {
     if (_isPlacingOrder) return;
+
+    // Require verified phone login before placing order (Swiggy-style auth gate)
+    final authState = ref.read(authProvider);
+    if (!authState.isAuthenticated || FirebaseService.instance.currentUser == null) {
+      HapticFeedback.mediumImpact();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.textPrimary,
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'Please verify your mobile number to confirm your breakfast order.',
+            style: AppTypography.labelLarge.copyWith(color: Colors.white),
+          ),
+        ),
+      );
+      context.push(RouteNames.phoneAuth);
+      return;
+    }
+
     setState(() => _isPlacingOrder = true);
     HapticFeedback.mediumImpact();
 
-    // Simulate payment intent processing
-    await Future.delayed(const Duration(milliseconds: 700));
-
+    await Future.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
 
-    // Trigger celebratory confetti
     _confettiKey.currentState?.burstAtCenter();
 
     final isSingleDay = cartState.orderMode == OrderMode.singleDay;
     final bagToken = DateTimeUtils.generateBagToken(customerState.selectedCluster.name, 4);
+    final targetDate = DateTimeUtils.targetDeliveryDate();
     final targetDateLabel = DateTimeUtils.targetDeliveryLabel();
 
+    final itemDetailsList = cartState.itemQuantities.entries.map((entry) {
+      final item = cartState.resolveItem(entry.key);
+      return {
+        'id': entry.key,
+        'name': item?.name ?? entry.key,
+        'price': item?.price ?? 49,
+        'qty': entry.value,
+      };
+    }).toList();
+
+    final singleDaySummary = itemDetailsList.isNotEmpty
+        ? itemDetailsList.map((e) => '${e['qty']}x ${e['name']}').join(', ')
+        : 'Morning Breakfast';
+
+    final userUid = FirebaseService.instance.currentUser?.uid ?? authState.phoneNumber;
+    final userPhone = authState.phoneNumber;
+    final tier = cartState.selectedPassTier ?? PassTierType.routine7Day;
+
+    // Record Live Order, Pass, and Meal Tickets to Cloud Firestore
+    String orderId = '';
+    try {
+      orderId = await FirebaseService.instance.recordOrder(
+        userId: userUid,
+        phoneNumber: userPhone,
+        customerName: authState.userName,
+        orderMode: isSingleDay ? 'singleDay' : 'subscriptionPass',
+        tier: isSingleDay ? null : tier.displayName,
+        tierKey: isSingleDay ? null : tier.name,
+        days: isSingleDay ? 1 : cartState.selectedPassDays,
+        kitchenId: cartState.activeKitchenId,
+        kitchenName: cartState.activeKitchenName,
+        itemQuantities: cartState.itemQuantities,
+        itemDetails: itemDetailsList,
+        totalAmount: cartState.totalPayable,
+        discountAmount: cartState.discountAmount,
+        appliedCoupon: cartState.appliedCoupon,
+        clusterId: customerState.selectedCluster.id,
+        clusterName: customerState.selectedCluster.name,
+        bagToken: bagToken,
+        deliveryDate: targetDateLabel,
+        startDate: targetDate,
+        deliverySlot: cartState.selectedDeliverySlot,
+        paymentMethod: cartState.paymentMethod,
+        deliveryInstructions: _notesController.text.trim(),
+        companionMeals: cartState.roommateMealCount,
+        specialtyNames: cartState.autoRotatePassMenu
+            ? CustomerDashboardViewModel.khammamSpecialties
+            : const [],
+      );
+
+      await NotificationService.instance.clearCartOnOrderSuccess(userPhone);
+    } catch (e) {
+      debugPrint('Firestore order recording notice: $e');
+    }
+
     if (isSingleDay) {
-      // Single-Day Tiffin Order: Create a fresh single-day ticket in the dashboard
-      final selectedItems = cartState.itemQuantities.keys.toList();
-      ref.read(customerDashboardProvider.notifier).activateNewPass(
-            tier: PassTierType.trial3Day,
-            combo: 'A',
-            addons: selectedItems.toSet(),
+      // Single-Day Order: Creates 1 scheduled morning meal ticket (NOT a 3-Day Pass)
+      ref.read(customerDashboardProvider.notifier).recordSingleDayOrder(
+            summaryName: singleDaySummary,
+            items: cartState.itemQuantities.keys.toSet(),
             companionMeals: cartState.roommateMealCount,
             bagToken: bagToken,
           );
     } else {
-      // Pass Order: Activate Pass in Dashboard
-      final tier = cartState.selectedPassTier ?? PassTierType.routine7Day;
       ref.read(customerDashboardProvider.notifier).activateNewPass(
             tier: tier,
             combo: 'A',
@@ -100,38 +171,15 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
             bagToken: bagToken,
           );
 
-      // Record in Subscription History
       ref.read(subscriptionHistoryProvider.notifier).addSubscription(
             tier: tier,
             combo: 'A',
             addons: cartState.itemQuantities.keys.toSet(),
             totalAmount: cartState.totalPayable,
             clusterName: customerState.selectedCluster.name,
+            orderId: orderId.isNotEmpty ? orderId : null,
+            bagToken: bagToken,
           );
-    }
-
-    // Record Live Order to Cloud Firestore (zero dummy data)
-    final authState = ref.read(authProvider);
-    final userPhone = authState.phoneNumber;
-    try {
-      await FirebaseService.instance.recordOrder(
-        userId: userPhone,
-        orderMode: isSingleDay ? 'singleDay' : 'subscriptionPass',
-        tier: cartState.selectedPassTier?.displayName,
-        days: cartState.selectedPassDays,
-        itemQuantities: cartState.itemQuantities,
-        totalAmount: cartState.totalPayable,
-        discountAmount: cartState.discountAmount,
-        appliedCoupon: cartState.appliedCoupon,
-        clusterName: customerState.selectedCluster.name,
-        bagToken: bagToken,
-        deliveryDate: targetDateLabel,
-      );
-
-      // Clear abandoned cart tracking upon successful order placement
-      await NotificationService.instance.clearCartOnOrderSuccess(userPhone);
-    } catch (e) {
-      debugPrint('Firestore order recording notice: $e');
     }
 
     // Reset Cart
@@ -549,12 +597,12 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.shield_outlined, size: 12, color: Color(0xFF2563EB)),
+                      const Icon(Icons.electric_bolt_rounded, size: 12, color: Color(0xFF16A34A)),
                       const SizedBox(width: 4),
                       Text(
-                        'Security Desk Drop Only • No floor delivery',
+                        'Express Morning Gate Drop by 7:30 AM',
                         style: AppTypography.caption.copyWith(
-                          color: const Color(0xFF1E40AF),
+                          color: const Color(0xFF15803D),
                           fontWeight: FontWeight.bold,
                           fontSize: 9.5,
                         ),
@@ -706,8 +754,26 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
           const Divider(height: 20, color: AppColors.charcoalBorder),
 
           if (isSingleDay) ...[
+            if (cartState.activeKitchenName != null) ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.storefront_rounded, size: 14, color: AppColors.zomatoRed),
+                    const SizedBox(width: 6),
+                    Text(
+                      'From ${cartState.activeKitchenName}',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textSecondary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             ...cartState.itemQuantities.entries.map((entry) {
-              final item = TiffinItem.findById(entry.key);
+              final item = cartState.resolveItem(entry.key);
               if (item == null) return const SizedBox.shrink();
 
               return Padding(
@@ -1287,10 +1353,36 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                 style: AppTypography.caption.copyWith(color: AppColors.urgentCrimson, fontSize: 11),
               ),
             ],
-            const SizedBox(height: 8),
-            Text(
-              '💡 Tip: Use FIRST50 for ₹50 off on first orders, or HUNGRFREE for ₹25 off',
-              style: AppTypography.caption.copyWith(color: AppColors.textSecondary, fontSize: 10.5),
+            const SizedBox(height: 10),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: ref.watch(offersProvider).map((offer) {
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: InkWell(
+                      onTap: () => _applyCoupon(offer.code),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: AppColors.zomatoRedSurface,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppColors.zomatoRedBorder),
+                        ),
+                        child: Text(
+                          '${offer.code} • ${offer.badgeText}',
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.zomatoRed,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 10.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
             ),
           ],
         ],
@@ -1462,89 +1554,21 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
             );
           }),
 
-          // Disabled Cash on Delivery Option (Requirement 1)
-          InkWell(
-            onTap: () {
-              HapticFeedback.heavyImpact();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  backgroundColor: AppColors.urgentCrimson,
-                  behavior: SnackBarBehavior.floating,
-                  content: Text(
-                    'Cash on Delivery is NOT available for 7:30 AM drops. All morning tiffins are prepaid via UPI to guarantee zero-contact 2-minute gate drops.',
-                    style: AppTypography.labelLarge.copyWith(color: Colors.white, fontSize: 12),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Icon(Icons.verified_user_outlined, size: 14, color: AppColors.neonMint),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Prepaid UPI only • Ensures zero-wait contactless delivery by 7:30 AM',
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.textSecondary,
+                    fontSize: 10.5,
                   ),
                 ),
-              );
-            },
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              margin: const EdgeInsets.only(bottom: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF3F4F6),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFE5E7EB)),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.money_off_rounded, size: 20, color: Color(0xFF9CA3AF)),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Row(
-                          children: [
-                            Text(
-                              'Cash on Delivery',
-                              style: AppTypography.labelLarge.copyWith(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: const Color(0xFF9CA3AF),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFEE2E2),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                'NOT AVAILABLE',
-                                style: AppTypography.monoBadge.copyWith(
-                                  color: AppColors.urgentCrimson,
-                                  fontSize: 8.5,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Radio<String>(
-                        value: 'Cash on Delivery',
-                        groupValue: null,
-                        onChanged: null,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Padding(
-                    padding: const EdgeInsets.only(left: 30),
-                    child: Text(
-                      'Disabled for morning gate drops to prevent delivery bottlenecks. Hostel security guards will not accept unpaid parcels.',
-                      style: AppTypography.caption.copyWith(
-                        color: const Color(0xFF6B7280),
-                        fontSize: 10,
-                        height: 1.3,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            ],
           ),
         ],
       ),
@@ -1553,7 +1577,9 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
 
   Widget _buildBillSummary(CartState cartState) {
     final isSingleDay = cartState.orderMode == OrderMode.singleDay;
-    final int subtotal = isSingleDay ? cartState.itemsSubtotal : cartState.passSubtotal;
+    final int subtotal = isSingleDay
+        ? cartState.itemsSubtotal
+        : (cartState.passSubtotal + cartState.itemsSubtotal - cartState.roommateSubtotal);
 
     return Container(
       padding: const EdgeInsets.all(16),

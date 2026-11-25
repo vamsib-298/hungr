@@ -156,34 +156,6 @@ class ShopSyncService {
     debugPrint('🔔 [Hungr Live Sync] New kitchen onboarded: $name');
   }
 
-  /// Quick test / simulated sync trigger for instant QA and verification
-  void triggerSimulatedOpsSync() {
-    final shops = _ref.read(tiffinShopsProvider);
-    if (shops.isEmpty) return;
-
-    // Toggle status of Bala Tiffin Corner or first closed shop
-    final targetShop = shops.firstWhere(
-      (s) => s.id == 'shop_bala_corner',
-      orElse: () => shops.first,
-    );
-
-    if (targetShop.isOpen) {
-      applyShopStatusUpdate(
-        shopId: targetShop.id,
-        status: ShopStatus.closedToday,
-        closureReason: 'Woodfire chimney maintenance in progress',
-        reopenDate: 'Tomorrow at 6:00 AM',
-      );
-    } else {
-      applyShopStatusUpdate(
-        shopId: targetShop.id,
-        status: ShopStatus.open,
-        closureReason: null,
-        reopenDate: null,
-      );
-    }
-  }
-
   void dispose() {
     _eventController.close();
   }

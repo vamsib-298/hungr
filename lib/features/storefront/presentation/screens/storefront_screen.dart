@@ -2,30 +2,33 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:animations/animations.dart';
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/constants/app_dimensions.dart';
 import '../../../../core/constants/app_typography.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/utils/date_time_utils.dart';
-import '../../../../core/widgets/confetti_burst_overlay.dart';
-import '../../../../core/widgets/hungr_network_image.dart';
+import '../../data/shop_sync_service.dart';
+import '../../domain/offer_model.dart';
 import '../../domain/tiffin_item_model.dart';
 import '../../domain/tiffin_shop_model.dart';
 import '../../../auth/presentation/viewmodels/auth_viewmodel.dart';
+import '../../../profile/presentation/screens/profile_screen.dart';
 import '../viewmodels/cart_viewmodel.dart';
 import '../viewmodels/customer_dashboard_viewmodel.dart';
+import '../viewmodels/offers_viewmodel.dart';
 import '../viewmodels/tiffin_shops_viewmodel.dart';
+import '../widgets/cart_action_helper.dart';
 import '../widgets/floating_cart_bar.dart';
-import '../widgets/hero_combo_card.dart';
-import '../widgets/morning_addons_selector.dart';
-import '../widgets/pass_card_3d.dart';
+import '../widgets/orders_tab_view.dart';
+import '../widgets/passes_tab_view.dart';
 import '../widgets/tiffin_item_card.dart';
-import '../../data/shop_sync_service.dart';
-import 'shop_details_screen.dart';
-import '../../../subscription/presentation/widgets/viral_referral_banner.dart';
+import '../widgets/tiffin_shop_card.dart';
 
-/// Clean, Minimalist Customer Storefront Screen (Morning Porcelain & Crimson Theme)
-/// Architected strictly for customers booking daily morning tiffins and multi-day meal passes.
+/// Swiggy-Grade Customer Shell with 4 Persistent Tabs:
+/// 0: Order (Home discovery, search, live offers, kitchens & dishes)
+/// 1: Passes (Morning meal subscription plans)
+/// 2: Orders (Upcoming morning tickets & real Firestore order history)
+/// 3: Account (Profile, delivery gate, referral & WhatsApp support)
 class StorefrontScreen extends ConsumerStatefulWidget {
   const StorefrontScreen({super.key});
 
@@ -34,32 +37,25 @@ class StorefrontScreen extends ConsumerStatefulWidget {
 }
 
 class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
+  int _currentTab = 0;
   String _selectedCategory = 'All';
-  PassTierType _selectedTier = PassTierType.routine7Day;
-  String _selectedComboId = 'combo_a';
-  final Set<String> _selectedPassAddons = {};
-  final GlobalKey<ConfettiBurstOverlayState> _confettiKey = GlobalKey();
+  bool _vegOnly = false;
+  bool _openNowOnly = false;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
   DateTime? _lastBackPressTime;
 
-  void _onTogglePassAddon(String id) {
-    setState(() {
-      if (_selectedPassAddons.contains(id)) {
-        _selectedPassAddons.remove(id);
-      } else {
-        _selectedPassAddons.add(id);
-      }
-    });
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final customerState = ref.watch(customerDashboardProvider);
-    final cartState = ref.watch(cartProvider);
-    final cartNotifier = ref.read(cartViewModelProvider.notifier);
-    final shops = ref.watch(tiffinShopsProvider);
-    final authState = ref.watch(authProvider);
 
-    // Silent Realtime Operations Live Sync Listener (Notifies user if a kitchen updates)
+    // Real-time kitchen operational broadcast notifications
     ref.listen(liveOpsEventStreamProvider, (previous, next) {
       next.whenData((event) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -72,19 +68,12 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
                 Expanded(
                   child: Text(
                     event.description,
-                    style: AppTypography.bodySmall.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: AppTypography.bodySmall.copyWith(color: Colors.white, fontWeight: FontWeight.w600),
                   ),
                 ),
               ],
             ),
-            backgroundColor: event.action == OpsSyncAction.statusChange
-                ? (event.description.contains('Open')
-                    ? const Color(0xFF16A34A)
-                    : const Color(0xFFD97706))
-                : AppColors.zomatoRed,
+            backgroundColor: AppColors.textPrimary,
             duration: const Duration(seconds: 3),
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -94,18 +83,14 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
       });
     });
 
-    final bool isPastCutoff = DateTimeUtils.isAfterCutoffToday();
-
-    // Filter items based on selected category
-    final List<TiffinItem> displayedItems = TiffinItem.standardMenu.where((item) {
-      if (_selectedCategory == 'All') return true;
-      return item.category == _selectedCategory;
-    }).toList();
-
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
+        if (_currentTab != 0) {
+          setState(() => _currentTab = 0);
+          return;
+        }
         final now = DateTime.now();
         if (_lastBackPressTime == null || now.difference(_lastBackPressTime!) > const Duration(seconds: 2)) {
           _lastBackPressTime = now;
@@ -122,374 +107,415 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
           SystemNavigator.pop();
         }
       },
-      child: ConfettiBurstOverlay(
-        key: _confettiKey,
-        child: Stack(
+      child: Scaffold(
+        backgroundColor: AppColors.obsidianBackground,
+        body: IndexedStack(
+          index: _currentTab,
           children: [
-            Scaffold(
-              backgroundColor: AppColors.obsidianBackground,
-              body: CustomScrollView(
-                physics: const BouncingScrollPhysics(),
-                slivers: [
-                  // 1. Sleek Minimal Top App Bar
-                  SliverAppBar(
-                    floating: true,
-                    pinned: true,
-                    backgroundColor: Colors.white,
-                    elevation: 0,
-                    scrolledUnderElevation: 1,
-                    shadowColor: const Color(0x1F000000),
-                    toolbarHeight: 64,
-                    title: Row(
-                      children: [
-                        // App Brand Icon
-                        Container(
-                          width: 34,
-                          height: 34,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(9),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: AppColors.zomatoRedGlow,
-                                blurRadius: 6,
-                                offset: Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(9),
-                            child: Image.asset(
-                              'assets/icons/app_icon_512.png',
-                              fit: BoxFit.cover,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        // App Name + Gate Location Selector
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                'HUNGR',
-                                style: AppTypography.headlineLarge.copyWith(
-                                  fontSize: 17,
-                                  letterSpacing: 1.1,
-                                  fontWeight: FontWeight.w800,
-                                  color: AppColors.textPrimary,
-                                ),
-                              ),
-                              InkWell(
-                                onTap: () {
-                                  HapticFeedback.lightImpact();
-                                  context.push(RouteNames.clusterSelection);
-                                },
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(Icons.location_on_rounded, color: AppColors.zomatoRed, size: 12),
-                                    const SizedBox(width: 3),
-                                    Flexible(
-                                      child: Text(
-                                        customerState.selectedCluster.name,
-                                        style: AppTypography.caption.copyWith(
-                                          color: AppColors.textSecondary,
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 11,
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
-                                        maxLines: 1,
-                                      ),
-                                    ),
-                                    const Icon(Icons.keyboard_arrow_down_rounded, color: AppColors.zomatoRed, size: 14),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        // Customer Tickets / Orders Icon Button
-                        InkWell(
-                          onTap: () {
-                            HapticFeedback.lightImpact();
-                            context.push(RouteNames.ticketCalendar);
-                          },
-                          borderRadius: BorderRadius.circular(20),
-                          child: Stack(
-                            clipBehavior: Clip.none,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF3F4F6),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: AppColors.charcoalBorder),
-                                ),
-                                child: const Icon(Icons.confirmation_number_outlined, color: AppColors.textPrimary, size: 18),
-                              ),
-                              if (customerState.tickets.isNotEmpty || customerState.hasActivePass)
-                                Positioned(
-                                  top: -2,
-                                  right: -2,
-                                  child: Container(
-                                    width: 10,
-                                    height: 10,
-                                    decoration: const BoxDecoration(
-                                      color: Color(0xFF16A34A),
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-
-                        // Meal Passes Icon Button (Left side of Profile icon)
-                        InkWell(
-                          onTap: () {
-                            HapticFeedback.lightImpact();
-                            _showMealPassBottomSheet(context, cartNotifier);
-                          },
-                          borderRadius: BorderRadius.circular(20),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFEF3C7),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: const Color(0xFFFDE68A)),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.card_membership_rounded, color: Color(0xFFB45309), size: 16),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Pass',
-                                  style: AppTypography.labelSmall.copyWith(
-                                    color: const Color(0xFF92400E),
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 11.5,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-
-                        // Customer Profile Icon
-                        InkWell(
-                          onTap: () {
-                            HapticFeedback.lightImpact();
-                            context.push(RouteNames.profile);
-                          },
-                          borderRadius: BorderRadius.circular(20),
-                          child: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF3F4F6),
-                              shape: BoxShape.circle,
-                              border: Border.all(color: AppColors.charcoalBorder),
-                            ),
-                            child: const Icon(Icons.person_outline_rounded, color: AppColors.textPrimary, size: 18),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // 2. Main Body Content
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // 2A. Smart Active Ticket Status Pill (Only if user has active delivery/pass)
-                          if (customerState.hasActivePass || customerState.tickets.isNotEmpty) ...[
-                            _buildActiveOrderBanner(context, customerState),
-                            const SizedBox(height: 12),
-                          ],
-
-                          // 2B. Compact Cutoff Ribbon (Non-intrusive & informative)
-                          _buildCutoffRibbon(isPastCutoff),
-                          const SizedBox(height: 14),
-
-                          // 2C. Personalized Morning Greeting Header
-                          _buildGreetingHeader(authState.userName),
-                          const SizedBox(height: 18),
-
-                          // Partner Kitchens Section (Horizontal Scrollable Showcase)
-                          _buildKitchensSection(shops),
-                          const SizedBox(height: 20),
-
-                          // Category Selector Chips
-                          _buildCategoryChips(),
-                          const SizedBox(height: 14),
-
-                          // Menu Section Header
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                'Fresh Morning Dishes',
-                                style: AppTypography.displayMedium.copyWith(fontSize: 17, color: AppColors.textPrimary),
-                              ),
-                              Text(
-                                '${displayedItems.length} items',
-                                style: AppTypography.caption.copyWith(color: AppColors.textSubtle),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Prepared at dawn and dropped at your security gate by 7:30 AM',
-                            style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary, fontSize: 11.5),
-                          ),
-                          const SizedBox(height: 12),
-
-                          // A-la-carte Items List
-                          ...displayedItems.map((item) {
-                            final quantity = cartState.itemQuantities[item.id] ?? 0;
-                            return TiffinItemCard(
-                              item: item,
-                              quantity: quantity,
-                              onAdd: () => cartNotifier.addItem(item.id),
-                              onRemove: () => cartNotifier.removeItem(item.id),
-                            );
-                          }),
-
-                          const SizedBox(height: 16),
-                          // Hostel Roommate Saving Tip
-                          _buildRoommateTip(),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            _buildHomeOrderTab(),
+            PassesTabView(
+              onViewSchedule: () => setState(() => _currentTab = 2),
             ),
-
-            // Floating Minimal Cart Bar
-            const FloatingCartBar(),
+            OrdersTabView(
+              onExploreMenu: () => setState(() => _currentTab = 0),
+            ),
+            const ProfileScreen(isEmbedded: true),
           ],
+        ),
+        bottomNavigationBar: Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(top: BorderSide(color: AppColors.charcoalBorder, width: 1)),
+            boxShadow: [
+              BoxShadow(color: Color(0x0D000000), blurRadius: 12, offset: Offset(0, -3)),
+            ],
+          ),
+          child: NavigationBar(
+            height: 64,
+            backgroundColor: Colors.white,
+            elevation: 0,
+            indicatorColor: AppColors.zomatoRedSurface,
+            selectedIndex: _currentTab,
+            onDestinationSelected: (idx) {
+              HapticFeedback.selectionClick();
+              setState(() => _currentTab = idx);
+            },
+            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+            destinations: [
+              const NavigationDestination(
+                icon: Icon(Icons.restaurant_menu_outlined, color: AppColors.textSecondary),
+                selectedIcon: Icon(Icons.restaurant_menu_rounded, color: AppColors.zomatoRed),
+                label: 'Order',
+              ),
+              const NavigationDestination(
+                icon: Icon(Icons.card_membership_outlined, color: AppColors.textSecondary),
+                selectedIcon: Icon(Icons.card_membership_rounded, color: AppColors.zomatoRed),
+                label: 'Passes',
+              ),
+              NavigationDestination(
+                icon: Badge(
+                  isLabelVisible: customerState.hasUpcomingMeal,
+                  backgroundColor: AppColors.neonMint,
+                  child: const Icon(Icons.receipt_long_outlined, color: AppColors.textSecondary),
+                ),
+                selectedIcon: Badge(
+                  isLabelVisible: customerState.hasUpcomingMeal,
+                  backgroundColor: AppColors.neonMint,
+                  child: const Icon(Icons.receipt_long_rounded, color: AppColors.zomatoRed),
+                ),
+                label: 'Orders',
+              ),
+              const NavigationDestination(
+                icon: Icon(Icons.person_outline_rounded, color: AppColors.textSecondary),
+                selectedIcon: Icon(Icons.person_rounded, color: AppColors.zomatoRed),
+                label: 'Account',
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  // --- SUB-WIDGET BUILDERS (CLEAN & MODULAR) ---
+  Widget _buildHomeOrderTab() {
+    final customerState = ref.watch(customerDashboardProvider);
+    final cartState = ref.watch(cartProvider);
+    final cartNotifier = ref.read(cartViewModelProvider.notifier);
+    final shops = ref.watch(tiffinShopsProvider);
+    final offers = ref.watch(offersProvider);
+    final authState = ref.watch(authProvider);
 
-  /// Personalized Time-Aware Greeting Header
-  Widget _buildGreetingHeader(String userName) {
-    final hour = DateTime.now().hour;
-    final String greeting;
-    final String icon;
-    if (hour < 12) {
-      greeting = 'Good Morning';
-      icon = '☀️';
-    } else if (hour < 17) {
-      greeting = 'Good Afternoon';
-      icon = '🌤️';
-    } else {
-      greeting = 'Good Evening';
-      icon = '🌙';
+    final bool isPastCutoff = DateTimeUtils.isAfterCutoffToday();
+    final q = _searchQuery.trim().toLowerCase();
+
+    // Sort open kitchens first, then filter by search / open toggle
+    final sortedShops = List<TiffinShop>.from(shops)
+      ..sort((a, b) {
+        if (a.isOpen == b.isOpen) return b.rating.compareTo(a.rating);
+        return a.isOpen ? -1 : 1;
+      });
+
+    final filteredShops = sortedShops.where((shop) {
+      if (_openNowOnly && !shop.isOpen) return false;
+      if (_vegOnly && !shop.isPureVeg) return false;
+      if (q.isEmpty) return true;
+      final shopMatch = shop.name.toLowerCase().contains(q) ||
+          shop.zone.toLowerCase().contains(q) ||
+          shop.specialties.any((s) => s.toLowerCase().contains(q));
+      final dishMatch = shop.menuItems.any((d) => d.name.toLowerCase().contains(q));
+      return shopMatch || dishMatch;
+    }).toList();
+
+    // Aggregate live dishes exclusively from OPEN partner kitchens
+    final List<TiffinItem> liveDishes = [];
+    for (final shop in sortedShops.where((s) => s.isOpen)) {
+      for (final rawDish in shop.menuItems) {
+        if (!rawDish.isAvailable) continue;
+        final dish = rawDish.copyWith(shopId: shop.id, shopName: shop.name);
+        if (_vegOnly && !dish.isVeg) continue;
+        if (_selectedCategory != 'All' && dish.category != _selectedCategory) continue;
+        if (q.isNotEmpty) {
+          final match = dish.name.toLowerCase().contains(q) ||
+              dish.description.toLowerCase().contains(q) ||
+              shop.name.toLowerCase().contains(q);
+          if (!match) continue;
+        }
+        liveDishes.add(dish);
+      }
     }
 
-    final firstName = userName.trim().isNotEmpty ? userName.trim().split(' ').first : 'Student';
-
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      crossAxisAlignment: CrossAxisAlignment.center,
+    return Stack(
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '$greeting, $firstName $icon',
-                style: AppTypography.displayMedium.copyWith(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.textPrimary,
-                  letterSpacing: -0.3,
+        CustomScrollView(
+          physics: const BouncingScrollPhysics(),
+          slivers: [
+            // 1. Swiggy-Style Top Location Header
+            SliverAppBar(
+              floating: true,
+              pinned: true,
+              backgroundColor: Colors.white,
+              elevation: 0,
+              scrolledUnderElevation: 1,
+              automaticallyImplyLeading: false,
+              toolbarHeight: 62,
+              title: Row(
+                children: [
+                  Expanded(
+                    child: InkWell(
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        context.push(RouteNames.clusterSelection);
+                      },
+                      borderRadius: BorderRadius.circular(10),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(7),
+                            decoration: BoxDecoration(
+                              color: AppColors.zomatoRedSurface,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.location_on_rounded, color: AppColors.zomatoRed, size: 20),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        customerState.selectedCluster.name,
+                                        style: AppTypography.titleSmall.copyWith(
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 14,
+                                          color: AppColors.textPrimary,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    const Icon(Icons.keyboard_arrow_down_rounded, color: AppColors.zomatoRed, size: 18),
+                                  ],
+                                ),
+                                Text(
+                                  '7:30 AM Gate Drop • ${customerState.selectedCluster.addressZone}',
+                                  style: AppTypography.caption.copyWith(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 10.5,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  if (!authState.isAuthenticated)
+                    ElevatedButton(
+                      onPressed: () => context.push(RouteNames.phoneAuth),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.zomatoRed,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        minimumSize: const Size(0, 32),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      ),
+                      child: const Text('Sign In', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    )
+                  else
+                    InkWell(
+                      onTap: () => setState(() => _currentTab = 1),
+                      borderRadius: BorderRadius.circular(20),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF3C7),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: const Color(0xFFFDE68A)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.bolt_rounded, color: Color(0xFFB45309), size: 15),
+                            const SizedBox(width: 3),
+                            Text(
+                              customerState.hasActivePass ? '${customerState.mealsRemaining} left' : 'Pass',
+                              style: AppTypography.labelSmall.copyWith(
+                                color: const Color(0xFF92400E),
+                                fontWeight: FontWeight.w800,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
+            // 2. Main Storefront Content
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 10, 16, cartState.isEmpty ? 28 : 104),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 2A. Swiggy Search Bar
+                    Container(
+                      height: 46,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: AppColors.charcoalBorder),
+                        boxShadow: const [
+                          BoxShadow(color: Color(0x06000000), blurRadius: 8, offset: Offset(0, 2)),
+                        ],
+                      ),
+                      child: TextField(
+                        controller: _searchController,
+                        onChanged: (v) => setState(() => _searchQuery = v),
+                        style: AppTypography.bodyMedium.copyWith(color: AppColors.textPrimary),
+                        decoration: InputDecoration(
+                          hintText: "Search 'Set Dosa', 'Idli', 'Filter Coffee'...",
+                          hintStyle: AppTypography.bodySmall.copyWith(color: AppColors.textSubtle, fontSize: 13),
+                          prefixIcon: const Icon(Icons.search_rounded, color: AppColors.zomatoRed, size: 21),
+                          suffixIcon: _searchQuery.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.close_rounded, size: 18, color: AppColors.textSubtle),
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    setState(() => _searchQuery = '');
+                                  },
+                                )
+                              : null,
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // 2B. Active Morning Meal Tracker (ONLY if user actually ordered!)
+                    if (customerState.hasUpcomingMeal && customerState.nextScheduledTicket != null) ...[
+                      _buildActiveOrderBanner(customerState),
+                      const SizedBox(height: 12),
+                    ],
+
+                    // 2C. Clean 9:00 PM Cutoff Info Strip
+                    _buildCutoffRibbon(isPastCutoff),
+                    const SizedBox(height: 14),
+
+                    // 2D. Live Offers Carousel (from Cloud Firestore)
+                    if (offers.isNotEmpty && q.isEmpty) ...[
+                      _buildOffersCarousel(offers, cartNotifier),
+                      const SizedBox(height: 18),
+                    ],
+
+                    // 2E. Filter Chips Row
+                    _buildFilterChips(),
+                    const SizedBox(height: 18),
+
+                    // 2F. Partner Kitchens Section
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Tiffin Centers in Khammam',
+                          style: AppTypography.titleLarge.copyWith(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 17,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        Text(
+                          '${filteredShops.where((s) => s.isOpen).length} Open',
+                          style: AppTypography.labelSmall.copyWith(
+                            color: AppColors.neonMint,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+
+                    if (filteredShops.isEmpty)
+                      _buildNoResultsCard('No kitchens match your filters')
+                    else
+                      ...filteredShops.map(
+                        (shop) => Padding(
+                          padding: const EdgeInsets.only(bottom: 14),
+                          child: TiffinShopCard(
+                            shop: shop,
+                            onTap: () => context.push(RouteNames.shopDetails, extra: shop.id),
+                          ),
+                        ),
+                      ),
+
+                    const SizedBox(height: 10),
+
+                    // 2G. Popular Morning Dishes from Open Kitchens
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Order Fresh Morning Dishes',
+                          style: AppTypography.titleLarge.copyWith(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 17,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        Text(
+                          '${liveDishes.length} items',
+                          style: AppTypography.caption.copyWith(color: AppColors.textSubtle),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Cooked fresh at dawn • Hot delivery by 7:30 AM',
+                      style: AppTypography.caption.copyWith(color: AppColors.textSecondary, fontSize: 11.5),
+                    ),
+                    const SizedBox(height: 12),
+
+                    if (liveDishes.isEmpty)
+                      _buildNoResultsCard('No dishes match your search or filters')
+                    else
+                      ...liveDishes.map((item) {
+                        final isSameKitchen =
+                            cartState.activeKitchenId == null || cartState.activeKitchenId == item.shopId;
+                        final quantity = isSameKitchen ? (cartState.itemQuantities[item.id] ?? 0) : 0;
+                        return TiffinItemCard(
+                          item: item,
+                          quantity: quantity,
+                          showKitchenName: true,
+                          onAdd: () => addTiffinItemWithKitchenCheck(context, ref, item),
+                          onRemove: () => cartNotifier.removeItem(item.id),
+                        );
+                      }),
+                  ],
                 ),
               ),
-              const SizedBox(height: 2),
-              Text(
-                'Fresh woodfire breakfast dropped by 07:30 AM',
-                style: AppTypography.bodySmall.copyWith(
-                  color: AppColors.textSecondary,
-                  fontSize: 11.5,
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF0FDF4),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFBBF7D0)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 6,
-                height: 6,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF16A34A),
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: 5),
-              Text(
-                'Khammam Live',
-                style: AppTypography.caption.copyWith(
-                  color: const Color(0xFF15803D),
-                  fontWeight: FontWeight.bold,
-                  fontSize: 10,
-                ),
-              ),
-            ],
-          ),
-        ),
+
+        // Floating Cart Bar above bottom navigation
+        const FloatingCartBar(),
       ],
     );
   }
 
-  /// Active Morning Order Status Pill (Clean Swiggy/Zomato style)
-  Widget _buildActiveOrderBanner(BuildContext context, CustomerDashboardState customerState) {
-    final bagToken = customerState.tickets.isNotEmpty ? customerState.tickets.first.bagToken : '#SS-04';
+  Widget _buildActiveOrderBanner(CustomerDashboardState customerState) {
+    final ticket = customerState.nextScheduledTicket!;
     return InkWell(
       onTap: () {
         HapticFeedback.lightImpact();
-        context.push(RouteNames.ticketCalendar);
+        setState(() => _currentTab = 2);
       },
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(14),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         decoration: BoxDecoration(
           color: const Color(0xFFF0FDF4),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(color: const Color(0xFF86EFAC)),
-          boxShadow: const [
-            BoxShadow(color: Color(0x08000000), blurRadius: 4, offset: Offset(0, 2)),
-          ],
         ),
         child: Row(
           children: [
             Container(
-              width: 8,
-              height: 8,
-              decoration: const BoxDecoration(
-                color: Color(0xFF16A34A),
-                shape: BoxShape.circle,
-              ),
+              padding: const EdgeInsets.all(6),
+              decoration: const BoxDecoration(color: Color(0xFFDCFCE7), shape: BoxShape.circle),
+              child: const Icon(Icons.check_circle_rounded, color: Color(0xFF16A34A), size: 18),
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -497,34 +523,35 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Morning Meal Confirmed • Bag $bagToken',
+                    'Breakfast Confirmed • Bag ${ticket.bagToken}',
                     style: AppTypography.labelLarge.copyWith(
                       color: const Color(0xFF15803D),
-                      fontWeight: FontWeight.w700,
+                      fontWeight: FontWeight.w800,
                       fontSize: 12.5,
                     ),
                   ),
                   Text(
-                    'Dropping at ${customerState.selectedCluster.name} by 7:30 AM',
+                    '${ticket.specialtyName ?? 'Morning Tiffin'} • Tap to manage',
                     style: AppTypography.caption.copyWith(color: const Color(0xFF166534), fontSize: 11),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.arrow_forward_ios_rounded, color: Color(0xFF16A34A), size: 13),
+            const Icon(Icons.arrow_forward_ios_rounded, color: Color(0xFF16A34A), size: 14),
           ],
         ),
       ),
     );
   }
 
-  /// Compact Cutoff Ribbon
   Widget _buildCutoffRibbon(bool isPastCutoff) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color: isPastCutoff ? const Color(0xFFF3E8FF) : const Color(0xFFFEF3C7),
-        borderRadius: BorderRadius.circular(10),
+        color: isPastCutoff ? const Color(0xFFF3E8FF) : const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isPastCutoff ? const Color(0xFFD8B4FE) : const Color(0xFFFDE68A),
         ),
@@ -532,7 +559,7 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
       child: Row(
         children: [
           Icon(
-            isPastCutoff ? Icons.nightlight_round : Icons.bolt_rounded,
+            isPastCutoff ? Icons.nightlight_round : Icons.schedule_rounded,
             color: isPastCutoff ? const Color(0xFF7E22CE) : const Color(0xFFB45309),
             size: 16,
           ),
@@ -540,11 +567,11 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
           Expanded(
             child: Text(
               isPastCutoff
-                  ? '🌙 Past 9:00 PM: Booking open for ${DateTimeUtils.targetDeliveryLabel()} drop'
-                  : '🔥 9:00 PM Cutoff: Booking closes tonight for tomorrow morning drop',
+                  ? 'Booking open for ${DateTimeUtils.targetDeliveryLabel()} 7:30 AM drop'
+                  : 'Order before 9:00 PM tonight for tomorrow morning drop',
               style: AppTypography.caption.copyWith(
                 color: isPastCutoff ? const Color(0xFF581C87) : const Color(0xFF78350F),
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
                 fontSize: 11,
               ),
             ),
@@ -554,257 +581,112 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
     );
   }
 
-  /// Dedicated Bottom Sheet for Meal Passes (opened from Pass button next to Profile)
-  void _showMealPassBottomSheet(BuildContext context, CartViewModel cartNotifier) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (modalContext) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return Container(
-              height: MediaQuery.of(context).size.height * 0.88,
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-              ),
-              child: Column(
-                children: [
-                  // Drag Handle
-                  Container(
-                    margin: const EdgeInsets.only(top: 12, bottom: 8),
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE5E7EB),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-
-                  // Header with Close
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(7),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFEF3C7),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: const Icon(Icons.card_membership_rounded, color: Color(0xFFB45309), size: 20),
-                            ),
-                            const SizedBox(width: 10),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Hungr Routine Passes',
-                                  style: AppTypography.displayMedium.copyWith(fontSize: 17, color: AppColors.textPrimary),
-                                ),
-                                Text(
-                                  'Zero-loss rollover • Auto gate delivery',
-                                  style: AppTypography.caption.copyWith(color: AppColors.textSecondary, fontSize: 11),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.of(modalContext).pop(),
-                          icon: const Icon(Icons.close_rounded, color: AppColors.textSecondary),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 1, color: Color(0xFFF3F4F6)),
-
-                  // Scrollable Pass Content
-                  Expanded(
-                    child: ListView(
-                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-                      children: [
-                        const ViralReferralBanner(),
-                        const SizedBox(height: 12),
-
-                        PassCard3D(
-                          tier: PassTierType.routine7Day,
-                          isSelected: _selectedTier == PassTierType.routine7Day,
-                          onTap: () {
-                            setState(() => _selectedTier = PassTierType.routine7Day);
-                            setModalState(() {});
-                            cartNotifier.selectPassTier(PassTierType.routine7Day);
-                          },
-                        ),
-                        PassCard3D(
-                          tier: PassTierType.power15Day,
-                          isSelected: _selectedTier == PassTierType.power15Day,
-                          onTap: () {
-                            setState(() => _selectedTier = PassTierType.power15Day);
-                            setModalState(() {});
-                            cartNotifier.selectPassTier(PassTierType.power15Day);
-                          },
-                        ),
-                        PassCard3D(
-                          tier: PassTierType.trial3Day,
-                          isSelected: _selectedTier == PassTierType.trial3Day,
-                          onTap: () {
-                            setState(() => _selectedTier = PassTierType.trial3Day);
-                            setModalState(() {});
-                            cartNotifier.selectPassTier(PassTierType.trial3Day);
-                          },
-                        ),
-
-                        const SizedBox(height: 16),
-
-                        // Tomorrow Combo preference
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'First Day Combo Choice',
-                              style: AppTypography.titleMedium.copyWith(
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.textPrimary,
-                              ),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF3F4F6),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                'ROTATING DAILY',
-                                style: AppTypography.monoBadge.copyWith(fontSize: 9, color: AppColors.textSecondary),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'You can swap your combo daily in your Ticket Calendar',
-                          style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary, fontSize: 11),
-                        ),
-                        const SizedBox(height: 10),
-
-                        HeroComboCard(
-                          comboId: 'combo_a',
-                          tagTitle: 'OPTION A',
-                          title: 'Hot Set Dosa (2 pcs)',
-                          chefName: 'Sri Venkateshwara Hub',
-                          description: '2 Fluffy Set Dosas + Groundnut Chutney + Allam Chutney + Piping Sambar.',
-                          calories: '420',
-                          protein: '11g',
-                          carbs: '68g',
-                          comboIcon: Icons.breakfast_dining,
-                          isSelected: _selectedComboId == 'combo_a',
-                          onSelected: () {
-                            setState(() => _selectedComboId = 'combo_a');
-                            setModalState(() {});
-                          },
-                        ),
-
-                        HeroComboCard(
-                          comboId: 'combo_b',
-                          tagTitle: 'OPTION B',
-                          title: 'Steamed Idli (4 pcs) + Medu Vada (1 pc)',
-                          chefName: 'Amma Chethi Vanta',
-                          description: '4 Soft Steamed Idlis + 1 Crispy Medu Vada + Chutney + Drumstick Sambar.',
-                          calories: '390',
-                          protein: '14g',
-                          carbs: '62g',
-                          comboIcon: Icons.dinner_dining,
-                          isSelected: _selectedComboId == 'combo_b',
-                          onSelected: () {
-                            setState(() => _selectedComboId = 'combo_b');
-                            setModalState(() {});
-                          },
-                        ),
-
-                        const SizedBox(height: 16),
-
-                        MorningAddonsSelector(
-                          selectedAddonIds: _selectedPassAddons,
-                          onToggleAddon: _onTogglePassAddon,
-                        ),
-
-                        const SizedBox(height: 20),
-
-                        // Proceed Button
-                        SizedBox(
-                          width: double.infinity,
-                          height: 50,
-                          child: ElevatedButton(
-                            onPressed: () {
-                              cartNotifier.setOrderMode(OrderMode.subscriptionPass);
-                              cartNotifier.selectPassTier(_selectedTier);
-                              Navigator.of(modalContext).pop();
-                              context.push(RouteNames.passCheckout);
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.zomatoRed,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              elevation: 2,
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  'Continue with ${_selectedTier.displayName}',
-                                  style: AppTypography.labelLarge.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
-                                ),
-                                const SizedBox(width: 8),
-                                const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 18),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  /// Horizontal Partner Kitchens Carousel
-  Widget _buildKitchensSection(List<TiffinShop> shops) {
+  Widget _buildOffersCarousel(List<OfferModel> offers, CartViewModel cartNotifier) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              'Partner Kitchens in Khammam',
-              style: AppTypography.displayMedium.copyWith(fontSize: 16.5, color: AppColors.textPrimary),
-            ),
-            Text(
-              '${shops.length} Hubs',
-              style: AppTypography.caption.copyWith(color: AppColors.textSubtle),
-            ),
-          ],
+        Text(
+          'Deals & Offers For You',
+          style: AppTypography.titleMedium.copyWith(
+            fontWeight: FontWeight.w800,
+            color: AppColors.textPrimary,
+          ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         SizedBox(
-          height: 154,
+          height: 86,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
-            itemCount: shops.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            itemCount: offers.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 10),
             itemBuilder: (context, index) {
-              final shop = shops[index];
-              return _buildCompactKitchenCard(shop);
+              final offer = offers[index];
+              final isFirst = index % 2 == 0;
+              return InkWell(
+                onTap: () {
+                  HapticFeedback.lightImpact();
+                  Clipboard.setData(ClipboardData(text: offer.code));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      backgroundColor: AppColors.textPrimary,
+                      behavior: SnackBarBehavior.floating,
+                      content: Text(
+                        'Coupon ${offer.code} copied! Apply it at checkout.',
+                        style: AppTypography.labelLarge.copyWith(color: Colors.white),
+                      ),
+                    ),
+                  );
+                },
+                borderRadius: BorderRadius.circular(14),
+                child: Container(
+                  width: 255,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: isFirst
+                          ? [const Color(0xFFE23744), const Color(0xFFB81D2B)]
+                          : [const Color(0xFF1E293B), const Color(0xFF0F172A)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(5),
+                                  ),
+                                  child: Text(
+                                    offer.badgeText,
+                                    style: AppTypography.monoBadge.copyWith(
+                                      color: Colors.white,
+                                      fontSize: 9.5,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  offer.code,
+                                  style: AppTypography.monoBadge.copyWith(
+                                    color: const Color(0xFFFDE68A),
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              offer.description,
+                              style: AppTypography.caption.copyWith(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      const Icon(Icons.copy_rounded, color: Colors.white70, size: 16),
+                    ],
+                  ),
+                ),
+              );
             },
           ),
         ),
@@ -812,194 +694,128 @@ class _StorefrontScreenState extends ConsumerState<StorefrontScreen> {
     );
   }
 
-  /// Compact Horizontal Kitchen Card
-  Widget _buildCompactKitchenCard(TiffinShop shop) {
-    return OpenContainer(
-      transitionType: ContainerTransitionType.fadeThrough,
-      transitionDuration: const Duration(milliseconds: 380),
-      openElevation: 0,
-      closedElevation: 0,
-      closedColor: Colors.transparent,
-      openColor: Colors.white,
-      middleColor: Colors.white,
-      closedShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      openShape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-      closedBuilder: (context, openContainer) {
-        return InkWell(
-          onTap: openContainer,
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            width: 210,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.charcoalBorder),
-              boxShadow: const [
-                BoxShadow(color: Color(0x06000000), blurRadius: 6, offset: Offset(0, 2)),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Top Cover Image
-                Stack(
-                  children: [
-                    ClipRRect(
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(11)),
-                      child: SizedBox(
-                        height: 84,
-                        width: double.infinity,
-                        child: HungrNetworkImage(
-                          imageUrl: shop.carouselImages.first,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      top: 6,
-                      right: 6,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: shop.isOpen ? const Color(0xFF15803D) : const Color(0xFFB91C1C),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          shop.isOpen ? 'OPEN' : 'CLOSED',
-                          style: AppTypography.caption.copyWith(color: Colors.white, fontSize: 8.5, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 6,
-                      left: 6,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.7),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.star_rounded, color: Color(0xFFFBBF24), size: 12),
-                            const SizedBox(width: 2),
-                            Text(
-                              shop.rating.toStringAsFixed(1),
-                              style: AppTypography.caption.copyWith(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                // Shop Details
-                Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        shop.name,
-                        style: AppTypography.titleSmall.copyWith(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textPrimary,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        shop.specialties.isNotEmpty ? shop.specialties.first : 'Woodfire Breakfast',
-                        style: AppTypography.caption.copyWith(
-                          fontSize: 10,
-                          color: AppColors.textSecondary,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-      openBuilder: (context, closeContainer) {
-        return ShopDetailsScreen(shopId: shop.id);
-      },
-    );
-  }
-
-  /// Category Filter Chips
-  Widget _buildCategoryChips() {
+  Widget _buildFilterChips() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       physics: const BouncingScrollPhysics(),
       child: Row(
         children: [
-          'All',
-          TiffinItem.categoryDailyBreakfast,
-          TiffinItem.categoryMorningAddons,
-          TiffinItem.categoryBeverages,
-        ].map((cat) {
-          final isSelected = _selectedCategory == cat;
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: InkWell(
-              onTap: () {
-                HapticFeedback.lightImpact();
-                setState(() => _selectedCategory = cat);
-              },
-              borderRadius: BorderRadius.circular(20),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                decoration: BoxDecoration(
-                  color: isSelected ? AppColors.zomatoRedSurface : Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: isSelected ? AppColors.zomatoRed : AppColors.charcoalBorder,
-                    width: isSelected ? 1.4 : 1.0,
+          _buildToggleChip(
+            label: 'Pure Veg',
+            isSelected: _vegOnly,
+            activeColor: const Color(0xFF16A34A),
+            icon: Icons.eco_rounded,
+            onTap: () => setState(() => _vegOnly = !_vegOnly),
+          ),
+          const SizedBox(width: 8),
+          _buildToggleChip(
+            label: 'Open Now',
+            isSelected: _openNowOnly,
+            activeColor: AppColors.zomatoRed,
+            icon: Icons.bolt_rounded,
+            onTap: () => setState(() => _openNowOnly = !_openNowOnly),
+          ),
+          const SizedBox(width: 8),
+          ...[
+            'All',
+            TiffinItem.categoryDailyBreakfast,
+            TiffinItem.categoryMorningAddons,
+            TiffinItem.categoryBeverages,
+          ].map((cat) {
+            final isSelected = _selectedCategory == cat;
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: InkWell(
+                onTap: () {
+                  HapticFeedback.lightImpact();
+                  setState(() => _selectedCategory = cat);
+                },
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: isSelected ? AppColors.zomatoRedSurface : Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: isSelected ? AppColors.zomatoRed : AppColors.charcoalBorder,
+                      width: isSelected ? 1.4 : 1.0,
+                    ),
                   ),
-                ),
-                child: Text(
-                  cat,
-                  style: AppTypography.labelSmall.copyWith(
-                    fontSize: 11.5,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                    color: isSelected ? AppColors.zomatoRed : AppColors.textSecondary,
+                  child: Text(
+                    cat,
+                    style: AppTypography.labelSmall.copyWith(
+                      fontSize: 11.5,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                      color: isSelected ? AppColors.zomatoRed : AppColors.textSecondary,
+                    ),
                   ),
                 ),
               ),
-            ),
-          );
-        }).toList(),
+            );
+          }),
+        ],
       ),
     );
   }
 
-  /// Subtle Roommate Savings Tip
-  Widget _buildRoommateTip() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF9FAFB),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.group_add_outlined, color: Color(0xFF2563EB), size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Hostel Roommates? Add companion meals for just ₹45 each at checkout to save together!',
-              style: AppTypography.caption.copyWith(color: AppColors.textSecondary, fontSize: 11),
+  Widget _buildToggleChip({
+    required String label,
+    required bool isSelected,
+    required Color activeColor,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: isSelected ? activeColor.withOpacity(0.1) : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? activeColor : AppColors.charcoalBorder,
+            width: isSelected ? 1.4 : 1.0,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: isSelected ? activeColor : AppColors.textSecondary),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: AppTypography.labelSmall.copyWith(
+                fontSize: 11.5,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                color: isSelected ? activeColor : AppColors.textSecondary,
+              ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNoResultsCard(String text) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: AppDimensions.radius16,
+        border: Border.all(color: AppColors.charcoalBorder),
+      ),
+      child: Column(
+        children: [
+          const Icon(Icons.search_off_rounded, size: 32, color: AppColors.textSubtle),
+          const SizedBox(height: 6),
+          Text(
+            text,
+            style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary, fontWeight: FontWeight.w600),
           ),
         ],
       ),

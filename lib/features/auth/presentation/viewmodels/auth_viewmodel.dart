@@ -1,6 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/services/local_storage_service.dart';
 import '../../../../core/services/firebase_service.dart';
+import '../../../../core/services/local_storage_service.dart';
 
 class AuthState {
   final bool isAuthenticated;
@@ -53,7 +53,7 @@ class AuthViewModel extends StateNotifier<AuthState> {
             isAuthenticated: false,
             isLoading: false,
             userName: 'Hungr Foodie',
-            phoneNumber: '+91 98765 43210',
+            phoneNumber: '',
             dropGate: 'Hostel Security Gate',
           ),
         ) {
@@ -64,25 +64,36 @@ class AuthViewModel extends StateNotifier<AuthState> {
     final currentUser = FirebaseService.instance.currentUser;
     final isAuth = await LocalStorageService.instance.isAuthenticated();
 
-    if (currentUser != null || isAuth) {
+    if (currentUser != null) {
       final session = await LocalStorageService.instance.getUserSession();
+      final savedPhone = currentUser.phoneNumber ?? session['phone'] ?? '';
       state = state.copyWith(
         isAuthenticated: true,
-        phoneNumber: session['phone'] ?? currentUser?.phoneNumber ?? state.phoneNumber,
-        userName: session['name'] ?? state.userName,
+        phoneNumber: savedPhone,
+        userName: (currentUser.displayName?.isNotEmpty == true)
+            ? currentUser.displayName!
+            : (session['name'] ?? state.userName),
         dropGate: session['clusterName'] ?? state.dropGate,
       );
+    } else if (isAuth) {
+      // Clear stale local auth if Firebase session expired
+      await LocalStorageService.instance.clearUserSession();
     }
   }
 
-  /// Sends real SMS OTP via Firebase
+  /// Sends 6-digit SMS OTP via Firebase Phone Auth
   Future<void> requestOtp({
     required String phone,
     required String name,
     required void Function() onSuccess,
     required void Function(String error) onError,
   }) async {
-    state = state.copyWith(isLoading: true, errorMessage: null);
+    state = state.copyWith(
+      isLoading: true,
+      errorMessage: null,
+      phoneNumber: phone,
+      userName: name.isNotEmpty ? name : state.userName,
+    );
 
     await FirebaseService.instance.sendOtp(
       phoneNumber: phone,
@@ -102,21 +113,28 @@ class AuthViewModel extends StateNotifier<AuthState> {
         onError(error);
       },
       onAutoVerified: (credential) async {
-        // Auto-verified on Android!
         try {
           final res = await FirebaseService.instance.auth.signInWithCredential(credential);
           if (res.user != null) {
-            login(phone: phone, name: name);
+            final effectiveName = name.isNotEmpty ? name : state.userName;
+            await FirebaseService.instance.syncUserProfile(
+              uid: res.user!.uid,
+              name: effectiveName,
+              phone: phone,
+              dropGate: state.dropGate,
+            );
+            login(phone: phone, name: effectiveName);
             onSuccess();
           }
         } catch (e) {
-          onError('Auto-sign in error: $e');
+          state = state.copyWith(isLoading: false);
+          onError('Auto-verification failed: $e');
         }
       },
     );
   }
 
-  /// Verifies the 6-digit OTP code with Firebase
+  /// Verifies the 6-digit SMS OTP code against Firebase Auth
   Future<void> verifyCode({
     required String smsCode,
     required void Function() onSuccess,
@@ -124,9 +142,7 @@ class AuthViewModel extends StateNotifier<AuthState> {
   }) async {
     final vId = state.verificationId;
     if (vId == null || vId.isEmpty) {
-      // In development fallback or demo test mode
-      login(phone: state.phoneNumber, name: state.userName);
-      onSuccess();
+      onError('Verification session expired. Please request a new OTP.');
       return;
     }
 
@@ -145,8 +161,8 @@ class AuthViewModel extends StateNotifier<AuthState> {
       state = state.copyWith(isLoading: false);
       onSuccess();
     } catch (e) {
-      state = state.copyWith(isLoading: false, errorMessage: e.toString());
-      onError(e.toString());
+      state = state.copyWith(isLoading: false, errorMessage: 'Invalid or expired OTP code. Please try again.');
+      onError('Invalid or expired OTP code. Please check and try again.');
     }
   }
 
@@ -172,8 +188,31 @@ class AuthViewModel extends StateNotifier<AuthState> {
 
   Future<void> logout() async {
     await FirebaseService.instance.signOut();
-    state = state.copyWith(isAuthenticated: false);
     await LocalStorageService.instance.clearUserSession();
+    state = const AuthState(
+      isAuthenticated: false,
+      isLoading: false,
+      userName: 'Hungr Foodie',
+      phoneNumber: '',
+      dropGate: 'Hostel Security Gate',
+    );
+  }
+
+  Future<bool> deleteAccount() async {
+    try {
+      await FirebaseService.instance.deleteUserAccount();
+      await LocalStorageService.instance.clearUserSession();
+      state = const AuthState(
+        isAuthenticated: false,
+        isLoading: false,
+        userName: 'Hungr Foodie',
+        phoneNumber: '',
+        dropGate: 'Hostel Security Gate',
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   void updateProfile({String? name, String? gate}) {

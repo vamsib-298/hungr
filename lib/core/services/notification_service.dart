@@ -1,8 +1,6 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:go_router/go_router.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/constants/app_typography.dart';
 import '../../core/router/app_router.dart';
@@ -92,9 +90,10 @@ class NotificationService {
 
   /// Displays Swiggy/Zomato style in-app alert banner for foreground notifications
   void _handleForegroundMessage(RemoteMessage message) {
-    final title = message.notification?.title ?? message.data['title'] ?? 'Hungr Breakfast Alert';
-    final body = message.notification?.body ?? message.data['body'] ?? '';
-    final route = message.data['route'] as String?;
+    final String title =
+        message.notification?.title ?? message.data['title']?.toString() ?? 'Hungr Breakfast Alert';
+    final String body = message.notification?.body ?? message.data['body']?.toString() ?? '';
+    final String? route = message.data['route']?.toString();
 
     final navContext = AppRouter.router.routerDelegate.navigatorKey.currentContext;
     if (navContext == null) return;

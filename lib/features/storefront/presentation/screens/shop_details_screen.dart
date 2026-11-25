@@ -12,6 +12,7 @@ import '../../domain/tiffin_item_model.dart';
 import '../../domain/tiffin_shop_model.dart';
 import '../viewmodels/cart_viewmodel.dart';
 import '../viewmodels/tiffin_shops_viewmodel.dart';
+import '../widgets/cart_action_helper.dart';
 import '../widgets/floating_cart_bar.dart';
 import '../widgets/tiffin_item_card.dart';
 
@@ -32,6 +33,15 @@ class ShopDetailsScreen extends ConsumerStatefulWidget {
 
 class _ShopDetailsScreenState extends ConsumerState<ShopDetailsScreen> {
   String _selectedCategory = 'All';
+  bool _vegOnly = false;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,10 +55,17 @@ class _ShopDetailsScreenState extends ConsumerState<ShopDetailsScreen> {
     final cartNotifier = ref.read(cartViewModelProvider.notifier);
     final bool isClosed = !shop.isOpen;
 
-    // Filter items by category
+    // Filter items by availability, veg, search, and category
     final displayedItems = shop.menuItems.where((item) {
-      if (_selectedCategory == 'All') return true;
-      return item.category == _selectedCategory;
+      if (!item.isAvailable) return false;
+      if (_vegOnly && !item.isVeg) return false;
+      if (_selectedCategory != 'All' && item.category != _selectedCategory) return false;
+      if (_searchQuery.isNotEmpty) {
+        final q = _searchQuery.toLowerCase();
+        return item.name.toLowerCase().contains(q) ||
+            item.description.toLowerCase().contains(q);
+      }
+      return true;
     }).toList();
 
     return PopScope(
@@ -248,35 +265,35 @@ class _ShopDetailsScreenState extends ConsumerState<ShopDetailsScreen> {
                           const SizedBox(height: 14),
                         ],
 
-                        // Strict Gate Drop Policy Notice (Requirement 7)
+                        // Friendly Express Morning Drop Pill
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFEFF6FF),
+                            color: const Color(0xFFF0FDF4),
                             borderRadius: AppDimensions.radius12,
-                            border: Border.all(color: const Color(0xFFBFDBFE)),
+                            border: Border.all(color: const Color(0xFFBBF7D0)),
                           ),
                           child: Row(
                             children: [
-                              const Icon(Icons.shield_outlined, color: Color(0xFF2563EB), size: 20),
+                              const Icon(Icons.electric_bolt_rounded, color: Color(0xFF16A34A), size: 20),
                               const SizedBox(width: 10),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      '⚡ Security Gate Drop Policy',
+                                      'Fresh 7:30 AM Gate Delivery',
                                       style: AppTypography.labelLarge.copyWith(
-                                        color: const Color(0xFF1E40AF),
+                                        color: const Color(0xFF15803D),
                                         fontWeight: FontWeight.w800,
                                         fontSize: 12,
                                       ),
                                     ),
                                     const SizedBox(height: 2),
                                     Text(
-                                      'Deliveries are strictly made to your Hostel Security Desk or Main Gate by 7:30 AM. No floor-by-floor climbing.',
+                                      'Order by 9:00 PM tonight for piping-hot delivery straight to your hostel or building gate.',
                                       style: AppTypography.caption.copyWith(
-                                        color: const Color(0xFF1E3A8A),
+                                        color: const Color(0xFF166534),
                                         fontSize: 10.5,
                                         height: 1.3,
                                       ),
@@ -338,7 +355,85 @@ class _ShopDetailsScreenState extends ConsumerState<ShopDetailsScreen> {
                           ),
                         ),
 
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 14),
+
+                        // Menu Search Bar + Pure Veg Toggle (Swiggy Style)
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Container(
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: AppColors.charcoalBorder),
+                                ),
+                                child: TextField(
+                                  controller: _searchController,
+                                  onChanged: (val) => setState(() => _searchQuery = val.trim()),
+                                  style: AppTypography.bodyMedium.copyWith(color: AppColors.textPrimary),
+                                  decoration: InputDecoration(
+                                    hintText: 'Search in ${shop.name}...',
+                                    hintStyle: AppTypography.bodySmall.copyWith(color: AppColors.textSubtle),
+                                    prefixIcon: const Icon(Icons.search_rounded, color: AppColors.zomatoRed, size: 19),
+                                    suffixIcon: _searchQuery.isNotEmpty
+                                        ? IconButton(
+                                            icon: const Icon(Icons.close_rounded, size: 16, color: AppColors.textSubtle),
+                                            onPressed: () {
+                                              _searchController.clear();
+                                              setState(() => _searchQuery = '');
+                                            },
+                                          )
+                                        : null,
+                                    border: InputBorder.none,
+                                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            InkWell(
+                              onTap: () {
+                                HapticFeedback.selectionClick();
+                                setState(() => _vegOnly = !_vegOnly);
+                              },
+                              borderRadius: BorderRadius.circular(12),
+                              child: Container(
+                                height: 42,
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                decoration: BoxDecoration(
+                                  color: _vegOnly ? const Color(0xFFECFDF5) : Colors.white,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: _vegOnly ? const Color(0xFF16A34A) : AppColors.charcoalBorder,
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(2),
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: const Color(0xFF16A34A), width: 1.4),
+                                        borderRadius: BorderRadius.circular(3),
+                                      ),
+                                      child: const Icon(Icons.circle, size: 6, color: Color(0xFF16A34A)),
+                                    ),
+                                    const SizedBox(width: 5),
+                                    Text(
+                                      'Veg',
+                                      style: AppTypography.labelSmall.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                        color: _vegOnly ? const Color(0xFF15803D) : AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 12),
 
                         // Category Selector Pills
                         SingleChildScrollView(
@@ -407,42 +502,60 @@ class _ShopDetailsScreenState extends ConsumerState<ShopDetailsScreen> {
                         const SizedBox(height: 10),
 
                         // Items List
-                        ...displayedItems.map((item) {
-                          final quantity = cartState.itemQuantities[item.id] ?? 0;
-                          return isClosed
-                              ? Opacity(
-                                  opacity: 0.6,
-                                  child: TiffinItemCard(
-                                    item: item,
-                                    quantity: 0,
-                                    onAdd: () {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            '${shop.name} is currently closed. ${shop.reopenDate ?? ""}',
-                                            style: AppTypography.labelLarge.copyWith(color: Colors.white),
+                        if (displayedItems.isEmpty)
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(28),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: AppDimensions.radius16,
+                              border: Border.all(color: AppColors.charcoalBorder),
+                            ),
+                            child: Column(
+                              children: [
+                                const Icon(Icons.no_meals_outlined, color: AppColors.textSubtle, size: 36),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'No matching dishes found',
+                                  style: AppTypography.titleSmall.copyWith(color: AppColors.textPrimary, fontWeight: FontWeight.w700),
+                                ),
+                              ],
+                            ),
+                          )
+                        else
+                          ...displayedItems.map((rawItem) {
+                            final item = rawItem.copyWith(shopId: shop.id, shopName: shop.name);
+                            final quantity = (cartState.activeKitchenId == null || cartState.activeKitchenId == shop.id)
+                                ? (cartState.itemQuantities[item.id] ?? 0)
+                                : 0;
+                            return isClosed
+                                ? Opacity(
+                                    opacity: 0.6,
+                                    child: TiffinItemCard(
+                                      item: item,
+                                      quantity: 0,
+                                      onAdd: () {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              '${shop.name} is currently closed. ${shop.reopenDate ?? ""}',
+                                              style: AppTypography.labelLarge.copyWith(color: Colors.white),
+                                            ),
+                                            backgroundColor: AppColors.zomatoRed,
+                                            behavior: SnackBarBehavior.floating,
                                           ),
-                                          backgroundColor: AppColors.zomatoRed,
-                                          behavior: SnackBarBehavior.floating,
-                                        ),
-                                      );
-                                    },
-                                    onRemove: () {},
-                                  ),
-                                )
-                              : TiffinItemCard(
-                                  item: item,
-                                  quantity: quantity,
-                                  onAdd: () {
-                                    // Ensure single day mode is active for item additions
-                                    if (cartState.orderMode != OrderMode.singleDay) {
-                                      cartNotifier.setOrderMode(OrderMode.singleDay);
-                                    }
-                                    cartNotifier.addItem(item.id);
-                                  },
-                                  onRemove: () => cartNotifier.removeItem(item.id),
-                                );
-                        }),
+                                        );
+                                      },
+                                      onRemove: () {},
+                                    ),
+                                  )
+                                : TiffinItemCard(
+                                    item: item,
+                                    quantity: quantity,
+                                    onAdd: () => addTiffinItemWithKitchenCheck(context, ref, item),
+                                    onRemove: () => cartNotifier.removeItem(item.id),
+                                  );
+                          }),
                       ],
                     ),
                   ),

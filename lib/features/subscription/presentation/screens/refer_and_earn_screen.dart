@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_dimensions.dart';
 import '../../../../core/constants/app_typography.dart';
 import '../../../../core/router/route_names.dart';
+import '../../../../core/utils/whatsapp_link_helper.dart';
 import '../../../../core/widgets/confetti_burst_overlay.dart';
 import '../../../../core/widgets/obsidian_card.dart';
 import '../../../storefront/presentation/viewmodels/customer_dashboard_viewmodel.dart';
@@ -25,6 +27,17 @@ class ReferAndEarnScreen extends ConsumerStatefulWidget {
 class _ReferAndEarnScreenState extends ConsumerState<ReferAndEarnScreen> {
   final GlobalKey<ConfettiBurstOverlayState> _confettiKey = GlobalKey();
   bool _copied = false;
+
+  Future<void> _shareOnWhatsApp(String code) async {
+    HapticFeedback.mediumImpact();
+    final msg = 'Hey! Try Hungr for hot South Indian breakfast delivered to our gate by 7:30 AM. Use my code $code (or FIRST50) for ₹50 OFF your first tiffin order!';
+    final uri = Uri.parse(WhatsAppLinkHelper.getWhatsAppWebUrl(message: msg));
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      _copyCode(code);
+    }
+  }
 
   void _copyCode(String code) {
     Clipboard.setData(ClipboardData(text: code));
@@ -463,43 +476,38 @@ class _ReferAndEarnScreenState extends ConsumerState<ReferAndEarnScreen> {
                 const SizedBox(height: 16),
 
                 // 6. Friends Activity Feed
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Referred Friends (${referralState.friends.length})',
-                      style: AppTypography.titleSmall.copyWith(fontWeight: FontWeight.w700, color: AppColors.textPrimary),
-                    ),
-                    // Quick Demo Simulator for user evaluation
-                    InkWell(
-                      onTap: () {
-                        ref.read(referralProvider.notifier).simulateFriendFirstOrder();
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: AppColors.zomatoRedSurface,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.check_circle_outline, color: AppColors.zomatoRed, size: 12),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Simulate 1st Order (+1)',
-                              style: AppTypography.caption.copyWith(
-                                color: AppColors.zomatoRed,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 10,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
+                Text(
+                  'Referred Friends (${referralState.friends.length})',
+                  style: AppTypography.titleSmall.copyWith(fontWeight: FontWeight.w700, color: AppColors.textPrimary),
                 ),
                 const SizedBox(height: 8),
+
+                if (referralState.friends.isEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.charcoalBorder),
+                    ),
+                    child: Column(
+                      children: [
+                        const Icon(Icons.group_outlined, color: AppColors.textSubtle, size: 28),
+                        const SizedBox(height: 6),
+                        Text(
+                          'No friends referred yet',
+                          style: AppTypography.titleSmall.copyWith(color: AppColors.textPrimary, fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Share your code on WhatsApp to start earning free breakfast passes!',
+                          style: AppTypography.caption.copyWith(color: AppColors.textSecondary),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
 
                 ...referralState.friends.map((friend) {
                   return Container(
@@ -614,7 +622,7 @@ class _ReferAndEarnScreenState extends ConsumerState<ReferAndEarnScreen> {
                             label: Text('CLAIM 3-DAY STARTER PASS (₹0)', style: AppTypography.labelLarge.copyWith(fontWeight: FontWeight.bold, fontSize: 14)),
                           )
                         : ElevatedButton.icon(
-                            onPressed: () => _copyCode(referralState.referralCode),
+                            onPressed: () => _shareOnWhatsApp(referralState.referralCode),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFF25D366), // WhatsApp Green
                               foregroundColor: Colors.white,
